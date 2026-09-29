@@ -48,8 +48,21 @@ class ModelSelection(StrictModel):
 
 class PlacePrice(StrictModel):
     provider_place_id: str
-    price_info: str | None = Field(max_length=100)
+    # 관광: 성인 1명 입장료, 식당: 1인분 평균, 숙소: 1박 가격 (원). 무료는 0, 모르면 null
+    amount_won: int | None = Field(ge=0)
 
 
 class PriceExtraction(StrictModel):
     prices: list[PlacePrice]
+
+
+class RestaurantInfo(StrictModel):
+    provider_place_id: str
+    open_time: str | None = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    close_time: str | None = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    closed_days: list[Literal["월", "화", "수", "목", "금", "토", "일"]] = Field(max_length=7)
+    menus: list[str] = Field(max_length=5)
+
+
+class RestaurantInfoExtraction(StrictModel):
+    restaurants: list[RestaurantInfo]

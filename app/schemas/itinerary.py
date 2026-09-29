@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 import unicodedata
 
@@ -14,6 +14,8 @@ PaceType = Literal["RELAXED", "BALANCED", "PACKED"]
 TransportType = Literal["WALK", "PUBLIC_TRANSPORT", "CAR"]
 MealType = Literal["BREAKFAST", "LUNCH", "DINNER"]
 Category = Literal["관광", "식당", "숙소"]
+Weekday = Literal["월", "화", "수", "목", "금", "토", "일"]
+WEEKDAYS = "월화수목금토일"  # date.weekday() 순서
 
 PACE_ALIASES = {
     "RELAXED": "RELAXED", "여유롭게": "RELAXED",
@@ -129,6 +131,27 @@ class Place(StrictModel):
     source_category: str = ""
     is_required: bool = False
     required_order: int | None = None
+    # 식당 후보만: 카카오 공식 검색에서 확인한 영업시간(HH:MM), 정기 휴무 요일, 대표 메뉴. 모르면 None/빈 배열
+    open_time: str | None = None
+    close_time: str | None = None
+    closed_days: list[str] = Field(default_factory=list)
+    menus: list[str] = Field(default_factory=list)
+
+    def is_closed_on(self, day) -> bool:
+        return WEEKDAYS[day.weekday()] in self.closed_days
+
+    def is_open_between(self, start, end) -> bool | None:
+        """start~end(datetime)에 영업 중인지. 휴무 요일이면 False, 영업시간을 모르면 None입니다."""
+        if self.is_closed_on(start):
+            return False
+        if not self.open_time or not self.close_time:
+            return None
+        day = start.date()
+        opens = datetime.combine(day, time.fromisoformat(self.open_time))
+        closes = datetime.combine(day, time.fromisoformat(self.close_time))
+        if closes <= opens:
+            closes += timedelta(days=1)  # 새벽까지 영업 (예: 17:00~02:00)
+        return opens <= start and end <= closes
 
 
 class ItineraryItem(StrictModel):
@@ -145,7 +168,10 @@ class ItineraryItem(StrictModel):
     meal_type: MealType | None = None
     start_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     end_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$", description="숙소는 23:59")
-    price_info: str | None = Field(default=None, description="블로그 검색을 참고한 가격 문구. 확인되지 않으면 null")
+    price_info: str | None = Field(
+        default=None,
+        description="블로그 검색을 참고한 성인 1명 기준 가격. 관광 \"성인 19,000원\"(무료 \"성인 무료\"), 식당 \"1인분 평균 11,000원\", 숙소 \"1박 120,000원\". 가격을 알 수 없으면 \"확인 필요\"",
+    )
     route_from_previous: RouteSummary | None = Field(
         default=None, description="이전 항목(다음날 첫 항목은 전날 숙소)에서 오는 이동. 여행 첫 항목은 null",
     )

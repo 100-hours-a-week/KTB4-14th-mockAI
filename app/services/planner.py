@@ -8,12 +8,15 @@ from pydantic import ValidationError
 from app.clients.openai_client import OpenAIClient
 from app.core.exceptions import GenerationFailed, InvalidModelOutput
 from app.core.geo import travel_minutes
-from app.core.logging import record
-from app.prompts.itinerary import CUSTOM_REQUEST_PROMPT, PLACE_RETRY_PROMPT, PLACE_SELECTION_PROMPT, PRICE_PROMPT
+from app.core.logging import record, timed
+from app.prompts.itinerary import (
+    CUSTOM_REQUEST_PROMPT, PLACE_RETRY_PROMPT, PLACE_SELECTION_PROMPT, PRICE_PROMPT, RESTAURANT_INFO_PROMPT,
+)
 from app.schemas.itinerary import Place, TravelGenerationRequest
-from app.schemas.planner import CustomRequest, ModelSelection, PriceExtraction
+from app.schemas.planner import CustomRequest, ModelSelection, PriceExtraction, RestaurantInfoExtraction
+from app.services.places import is_market
 from app.services.scheduler import STAY_MINUTES, DayPlan, Visit, validate_selection
-from app.services.selection import complete_selection
+from app.services.selection import complete_selection, repair_closed_meals
 
 
 class OpenAIPlanner:
@@ -51,6 +54,19 @@ class OpenAIPlanner:
             return ModelSelection.model_validate_json(raw)
         except ValidationError as exc:
             raise InvalidModelOutput("model output must match itinerary schema") from exc
+
+    async def extract_restaurant_info(self, entries: list[dict]) -> RestaurantInfoExtraction:
+        messages = [
+            {"role": "system", "content": RESTAURANT_INFO_PROMPT},
+            {"role": "user", "content": json.dumps(entries, ensure_ascii=False)},
+        ]
+        schema = RestaurantInfoExtraction.model_json_schema()
+        schema["$defs"]["RestaurantInfo"]["properties"]["provider_place_id"]["enum"] = [e["provider_place_id"] for e in entries]
+        raw = await self.openai.complete_json(messages, schema, "audigo_restaurant_info", max_tokens=6000)
+        try:
+            return RestaurantInfoExtraction.model_validate_json(raw)
+        except ValidationError as exc:
+            raise InvalidModelOutput("restaurant info must match schema") from exc
 
     async def extract_prices(self, entries: list[dict]) -> PriceExtraction:
         messages = [
@@ -116,15 +132,29 @@ def build_selection_context(
                 "provider_place_id": p.provider_place_id, "place_name": p.place_name, "category": p.category,
                 "source_category": p.source_category, "address": p.address,
                 "latitude": p.latitude, "longitude": p.longitude, "is_required": p.is_required,
+                "is_market": is_market(p),
+                **({"open_time": p.open_time, "close_time": p.close_time, "closed_days": p.closed_days, "menus": p.menus}
+                   if p.category == "식당" else {}),
             }
             for p in candidates
         ],
         "travel_minutes": {
-            "description": "후보 간 예상 이동시간(분). 행·열 순서는 place_ids",
-            "place_ids": [p.provider_place_id for p in candidates],
-            "by_transport": {mode: [[travel_minutes(a, b, mode) for b in candidates] for a in candidates] for mode in modes},
+            "description": f"후보마다 가장 가까운 {NEAREST_NEIGHBORS}곳까지의 예상 이동시간(분). [장소 ID, 분] 목록",
+            "by_transport": {mode: nearest_minutes(candidates, mode) for mode in modes},
         },
     }
+
+
+NEAREST_NEIGHBORS = 8  # 장소 선택 모델에 보낼 후보별 이동시간 이웃 수 (전체 표 대신)
+
+
+def nearest_minutes(candidates: list[Place], mode: str) -> dict[str, list[list]]:
+    table = {}
+    for place in candidates:
+        others = sorted((travel_minutes(place, other, mode), other.provider_place_id)
+                        for other in candidates if other is not place)
+        table[place.provider_place_id] = [[pid, minutes] for minutes, pid in others[:NEAREST_NEIGHBORS]]
+    return table
 
 
 async def recommend_places(
@@ -137,8 +167,10 @@ async def recommend_places(
     feedback = None
     for attempt in range(2):
         try:
-            selection = await planner.select_places(context, feedback)
+            with timed("place_selection_llm", attempt=attempt + 1, candidates=len(candidates)):
+                selection = await planner.select_places(context, feedback)
             selection = complete_selection(plans, selection, candidates)
+            selection = repair_closed_meals(plans, selection, candidates)
             return selection.title, validate_selection(plans, selection, candidates, required)
         except InvalidModelOutput as exc:
             feedback = str(exc)

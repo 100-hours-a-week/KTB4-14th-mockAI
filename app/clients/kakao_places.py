@@ -39,6 +39,7 @@ GROUPS = {"AT4": "관광", "CT1": "관광", "FD6": "식당", "CE7": "식당", "A
 # (기본 반경 m, distance_preference 100일 때 추가 반경 m)
 CANDIDATE_RADIUS = {"WALK": (1500, 3500), "PUBLIC_TRANSPORT": (4000, 8000), "CAR": (6000, 14000)}
 CANDIDATE_LIMITS = {"관광": 60, "식당": 60}
+MARKET_STORE_RADIUS = 500   # 시장 안 가게를 찾을 반경(m)
 REGION_ALIASES = {
     "제주특별자치도": "제주", "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구",
     "인천광역시": "인천", "광주광역시": "광주", "대전광역시": "대전", "울산광역시": "울산",
@@ -167,6 +168,8 @@ class KakaoPlaces:
         for food in search.foods[:5]:
             queries.append((FOOD_QUERIES.get(food, food), "FD6", 1))
         # 후보 수를 자를 때 취향(테마·음식) 검색 결과가 먼저 남도록 앞에 둡니다.
+        # 아침 자리를 채울 식당 (아침에 여는 곳이 적어서 따로 찾습니다)
+        queries += [("아침식사", "FD6", 1), ("해장국", "FD6", 1)]
         queries += [("관광명소", "AT4", 3), ("음식점", "FD6", 3)]
         calls = []
         for query, group, pages in dict.fromkeys(queries):
@@ -234,3 +237,22 @@ class KakaoPlaces:
             record("accommodation_region_fallback", canonical_region=region, candidates=len(outside))
             return list(outside.values())
         return list(inside.values())
+
+    async def market_restaurants(self, market: Place) -> list[Place]:
+        """시장 반경 안 음식점. "시장명 맛집" 정확도순 결과가 먼저이고, 없으면 시장에서 가까운 순입니다."""
+        documents = await self._get("keyword", {
+            "query": f"{market.place_name} 맛집", "x": market.longitude, "y": market.latitude,
+            "radius": MARKET_STORE_RADIUS, "category_group_code": "FD6", "sort": "accuracy", "size": 5,
+        })
+        if not documents:
+            documents = await self._get("category", {
+                "category_group_code": "FD6", "x": market.longitude, "y": market.latitude,
+                "radius": MARKET_STORE_RADIUS, "sort": "distance", "size": 5,
+            })
+        stores = []
+        for doc in documents:
+            try:
+                stores.append(to_place(doc, "식당"))
+            except (ValidationError, KeyError, TypeError, ValueError):
+                continue
+        return stores

@@ -9,12 +9,17 @@ from app.clients.mock import MockPlaces, MockRoutes, MockSearch
 from app.core.exceptions import GenerationFailed
 from app.core.geo import distance_km
 from app.schemas.itinerary import TravelGenerationRequest
-from app.schemas.planner import CustomRequest, ModelSelection, PlacePrice, PriceExtraction
+from app.schemas.planner import (
+    CustomRequest, ModelSelection, PlacePrice, PriceExtraction, RestaurantInfo, RestaurantInfoExtraction,
+)
 from app.services.pipeline import Providers, generation_stages
 
 
 FAIL_STAGES = {"fail_place": "PLACES", "fail_stay": "ACCOMMODATIONS", "fail_route": "ROUTES"}
 PRICE = re.compile(r"[\d,]+원")
+HOURS = re.compile(r"영업시간 (\d\d:\d\d)~(\d\d:\d\d)")
+MENU = re.compile(r"대표 메뉴 (\S+)")
+HOLIDAY = re.compile(r"매주 (\S)요일 휴무")
 
 
 class MockPlanner:
@@ -64,11 +69,24 @@ class MockPlanner:
             days.append({"date": plan["date"], "items": items})
         return ModelSelection(title=f"{context['request']['region']} 목업 여행", days=days)
 
+    async def extract_restaurant_info(self, entries: list[dict]) -> RestaurantInfoExtraction:
+        restaurants = []
+        for entry in entries:
+            text = " ".join(entry["snippets"])
+            hours, menu, holiday = HOURS.search(text), MENU.search(text), HOLIDAY.search(text)
+            restaurants.append(RestaurantInfo(
+                provider_place_id=entry["provider_place_id"],
+                open_time=hours.group(1) if hours else None, close_time=hours.group(2) if hours else None,
+                closed_days=[holiday.group(1)] if holiday else [], menus=[menu.group(1)] if menu else [],
+            ))
+        return RestaurantInfoExtraction(restaurants=restaurants)
+
     async def extract_prices(self, entries: list[dict]) -> PriceExtraction:
         prices = []
         for entry in entries:
             found = next((m.group() for s in entry["snippets"] for m in [PRICE.search(s)] if m), None)
-            prices.append(PlacePrice(provider_place_id=entry["provider_place_id"], price_info=f"목업 {found}" if found else None))
+            amount = int(found.rstrip("원").replace(",", "")) if found else None
+            prices.append(PlacePrice(provider_place_id=entry["provider_place_id"], amount_won=amount))
         return PriceExtraction(prices=prices)
 
 

@@ -25,6 +25,7 @@ DEFAULT_CENTER = REGION_CENTERS["서울"]
 SPREAD_KM = {"WALK": 1.2, "PUBLIC_TRANSPORT": 3.0, "CAR": 6.0}
 TOUR_KINDS = ["전망대", "해변 산책로", "공원", "박물관", "전통시장", "숲길", "미술관", "사찰", "야경 명소", "체험관"]
 FOOD_KINDS = ["한식당", "국밥집", "해산물 식당", "분식집", "고깃집", "브런치 카페", "면요리집", "백반집"]
+MORNING_FOODS = ("국밥", "백반", "브런치", "해장")
 CANDIDATES_PER_CATEGORY = 40
 
 
@@ -80,6 +81,18 @@ class MockPlaces:
         return hotels
 
 
+    async def market_restaurants(self, market: Place) -> list[Place]:
+        rng = random.Random(zlib.crc32(f"{self.seed}:{market.provider_place_id}".encode()))
+        stores = []
+        for n in range(1, 4):
+            y, x = scatter(rng, market.latitude, market.longitude, 0.2)
+            stores.append(Place(
+                provider_place_id=f"{market.provider_place_id}-store-{n}", place_name=f"{market.place_name} 목업 맛집 {n}",
+                address=market.address, latitude=y, longitude=x, category="식당", source_category="음식점 > 한식",
+            ))
+        return stores
+
+
 class MockRoutes:
     async def route(self, origin, destination, departure, transport: str) -> RouteDetails:
         minutes = travel_minutes(origin, destination, transport)
@@ -100,6 +113,15 @@ class MockRoutes:
 
 
 class MockSearch:
-    async def blog_snippets(self, query: str, size: int = 3) -> list[str]:
+    async def search_snippets(self, query: str, size: int = 4) -> list[str]:
+        if "영업시간" in query:
+            # 아침 식사에 어울리는 가게는 07시, 나머지는 11시에 엽니다.
+            early = any(word in query for word in MORNING_FOODS)
+            menu = next((word for word in MORNING_FOODS if word in query), "정식")
+            holiday = "월" if zlib.crc32(query.encode()) % 3 == 0 else None
+            closed = f", 매주 {holiday}요일 휴무" if holiday else ", 연중무휴"
+            return [f"{query} 후기. 영업시간 {'07:00' if early else '11:00'}~21:00{closed}, 대표 메뉴 {menu}"]
         price = (zlib.crc32(query.encode()) % 20 + 1) * 1000
+        if "1박" in query:
+            price *= 8
         return [f"{query} 다녀왔어요. 가격은 {price:,}원이었습니다."]

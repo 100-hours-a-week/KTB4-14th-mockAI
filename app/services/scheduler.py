@@ -10,9 +10,10 @@ from datetime import date, datetime, time, timedelta
 import math
 
 from app.core.exceptions import GenerationFailed, InvalidModelOutput
-from app.schemas.itinerary import Place, TravelGenerationRequest
+from app.schemas.itinerary import WEEKDAYS, Place, TravelGenerationRequest
 from app.schemas.planner import CustomRequest, ModelSelection
 from app.core.geo import TRAVEL_SPEEDS, path_km, travel_minutes
+from app.services.places import MARKET_MEALS, is_market
 
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,8 @@ ARRIVAL_BUFFER_MINUTES = 60           # 도착 장소 → 첫 일정 이동 여�
 DEPARTURE_BUFFER_MINUTES = 60         # 마지막 일정 → 출발 장소 이동 여유
 FULL_DAY_MINUTES = 810                # TARGET_START~TARGET_RETURN, 관광 개수 비례 계산 기준
 WALK_LIMIT_KM = 50                    # 도보인 날 하루 도보 이동 상한
+MARKET_TOURS_PER_DAY = 1              # 하루에 관광지로 넣을 수 있는 시장 수 (끼니로 쓴 시장은 제외)
+MAX_OPENING_WAIT_MINUTES = 90         # 식당이 이 시간 안에 문을 열면 오픈 시각까지 기다렸다가 식사합니다
 
 # pace별 관광 개수 (하루를 다 쓰는 날 기준 최소, 최대)
 TOUR_COUNTS = {"RELAXED": (2, 4), "BALANCED": (3, 5), "PACKED": (4, 6)}
@@ -73,6 +76,7 @@ class DayPlan:
     def summary(self) -> dict:
         return {
             "date": self.date.isoformat(),
+            "weekday": WEEKDAYS[self.date.weekday()],
             "transport_type": self.transport,
             "pace_type": self.pace,
             "start": self.soft_start.strftime("%H:%M"),
@@ -89,6 +93,16 @@ class DayPlan:
 class Visit:
     place: Place
     meal_type: str | None = None
+
+    @property
+    def stay_category(self) -> str:
+        # 끼니로 쓴 시장은 식당 기준 체류시간을 씁니다.
+        return "식당" if self.meal_type else self.place.category
+
+    @property
+    def is_tour(self) -> bool:
+        # 끼니로 쓴 시장은 관광지 수에 세지 않습니다.
+        return self.place.category == "관광" and self.meal_type is None
 
 
 @dataclass
@@ -199,7 +213,7 @@ def schedule_day(plan: DayPlan, visits: list[Visit], transfers: list[int], tail:
     그래도 모자라면 TimeShortage를 냅니다.
     """
     policy = STAY_MINUTES[plan.pace]
-    minimums = [policy[v.place.category][0] for v in visits]
+    minimums = [policy[v.stay_category][0] for v in visits]
     required = sum(transfers) + sum(minimums) + tail
     start, end = plan.soft_start, plan.soft_end
     shortage = required - minutes_between(start, end)
@@ -218,12 +232,18 @@ def schedule_day(plan: DayPlan, visits: list[Visit], transfers: list[int], tail:
         cursor += timedelta(minutes=transfer)
         remaining -= transfer
         slack = max(0, minutes_between(cursor, end) - remaining)
+        opens = opening_time(visit.place, cursor)
+        if visit.meal_type and opens is not None and cursor < opens:
+            # 곧 문을 여는 식당은 오픈 시각까지 기다립니다 (여유 시간 안에서만).
+            wait = min(slack, minutes_between(cursor, opens))
+            cursor += timedelta(minutes=wait)
+            slack -= wait
         if visit.meal_type:
             target = datetime.combine(plan.date, MEALS[visit.meal_type][0])
             wait = min(slack, minutes_between(cursor, target - timedelta(minutes=MEAL_EARLY_TOLERANCE_MINUTES)))
             cursor += timedelta(minutes=wait)
             slack -= wait
-        low, high = policy[visit.place.category]
+        low, high = policy[visit.stay_category]
         stay = minimum + min(slack, (low + high) // 2 - low)
         remaining -= minimum
         timed.append(TimedVisit(visit.place, visit.meal_type, cursor, cursor + timedelta(minutes=stay)))
@@ -286,8 +306,14 @@ def validate_selection(
             seen.add(place.provider_place_id)
             if place.category == "식당" and item.meal_type is None:
                 raise InvalidModelOutput(f"{day.date}: 식당에는 meal_type을 지정하세요")
-            visits.append(Visit(place, item.meal_type if place.category == "식당" else None))
-        tours = sum(v.place.category == "관광" for v in visits)
+            meal = item.meal_type
+            if place.category == "관광" and meal is not None:
+                if not is_market(place):
+                    meal = None  # 시장이 아닌 관광지의 끼니 표시는 무시합니다.
+                elif meal not in MARKET_MEALS:
+                    raise InvalidModelOutput(f"{place.place_name}: 시장은 점심·저녁 자리에만 넣을 수 있습니다")
+            visits.append(Visit(place, meal))
+        tours = sum(v.is_tour for v in visits)
         if not plan.tour_min <= tours <= plan.tour_max:
             raise InvalidModelOutput(f"{day.date}: 관광지는 {plan.tour_min}~{plan.tour_max}곳이어야 합니다 (현재 {tours})")
         meals = [v.meal_type for v in visits if v.meal_type]
@@ -295,6 +321,9 @@ def validate_selection(
             raise InvalidModelOutput(f"{day.date}: 식사는 {plan.meals} 순서로 한 번씩 넣으세요 (현재 {meals})")
         if "BREAKFAST" in meals and visits[0].meal_type != "BREAKFAST":
             raise InvalidModelOutput(f"{day.date}: 아침 식사는 그날 첫 항목이어야 합니다")
+        market_tours = sum(v.is_tour and is_market(v.place) for v in visits)
+        if market_tours > MARKET_TOURS_PER_DAY:
+            raise InvalidModelOutput(f"{day.date}: 시장은 하루에 관광지로 {MARKET_TOURS_PER_DAY}곳까지 넣을 수 있습니다 (현재 {market_tours})")
         result.append(visits)
 
     required_ids = [p.provider_place_id for p in required if p.category != "숙소"]
@@ -305,6 +334,34 @@ def validate_selection(
     for plan, visits in zip(plans, result):
         previous_hotel = None
         transfers, tail = estimated_transfers(plan, visits, previous_hotel, None)
-        schedule_day(plan, visits, transfers, tail)
+        schedule = schedule_day(plan, visits, transfers, tail)
         check_walking(plan, walking_km(plan, visits, previous_hotel, None))
+        closed = closed_meals(schedule)
+        if closed:
+            v = closed[0]
+            if v.place.is_closed_on(v.start):
+                reason = f"{WEEKDAYS[v.start.weekday()]}요일 휴무라 이 날짜에 넣을 수 없습니다. 이날 영업하는 식당을 고르세요"
+            else:
+                reason = (f"{v.place.open_time}~{v.place.close_time} 영업이라 {v.start.strftime('%H:%M')} 식사에 맞지 않습니다. "
+                          "그 시각에 영업하는 식당을 고르세요")
+            raise InvalidModelOutput(f"{plan.date.isoformat()}: {v.place.place_name}은 {reason}")
     return result
+
+
+def opening_time(place: Place, at: datetime) -> datetime | None:
+    """at 이후 MAX_OPENING_WAIT_MINUTES 안에 문을 여는 시각. 영업시간을 모르거나 휴무 요일이면 None입니다."""
+    if not place.open_time or place.is_closed_on(at):
+        return None
+    opens = datetime.combine(at.date(), time.fromisoformat(place.open_time))
+    return opens if at < opens <= at + timedelta(minutes=MAX_OPENING_WAIT_MINUTES) else None
+
+
+def meal_start(place: Place, at: datetime, stay_minutes: int) -> datetime | None:
+    """at 무렵에 식사할 수 있는 시작 시각. 곧 문을 열면 오픈 시각, 식사할 수 없으면 None입니다."""
+    start = opening_time(place, at) or at
+    return start if place.is_open_between(start, start + timedelta(minutes=stay_minutes)) is not False else None
+
+
+def closed_meals(schedule: DaySchedule) -> list[TimedVisit]:
+    """휴무 요일이거나 영업시간이 확인된 식당 중 배정된 식사 시각에 문을 닫는 곳. 정보가 없으면 문제로 보지 않습니다."""
+    return [v for v in schedule.visits if v.meal_type and v.place.is_open_between(v.start, v.end) is False]

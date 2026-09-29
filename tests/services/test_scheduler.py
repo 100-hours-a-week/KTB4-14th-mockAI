@@ -147,3 +147,88 @@ def test_walking_day_is_capped_at_50km():
     check_walking(plan, 49.9)
     with pytest.raises(InvalidModelOutput, match="50km"):
         check_walking(plan, 50.1)
+
+
+def market_candidates():
+    return candidates() + [place("m0", "관광", 35.1605, 129.0605, source_category="쇼핑 > 전통시장")]
+
+
+def test_market_can_fill_lunch_and_does_not_count_as_a_tour():
+    items = [("r0", "BREAKFAST"), ("t0", None), ("m0", "LUNCH"), ("t1", None), ("r2", "DINNER")]
+
+    visits = validate_selection(day_trip_plans(), selection(*items), market_candidates(), [])
+
+    market = visits[0][2]
+    assert market.meal_type == "LUNCH" and not market.is_tour and market.stay_category == "식당"
+
+
+def test_market_cannot_be_breakfast():
+    items = [("m0", "BREAKFAST"), ("t0", None), ("r1", "LUNCH"), ("t1", None), ("r2", "DINNER")]
+
+    with pytest.raises(InvalidModelOutput, match="점심·저녁"):
+        validate_selection(day_trip_plans(), selection(*items), market_candidates(), [])
+
+
+def test_meal_label_on_a_non_market_tour_is_ignored():
+    items = [("r0", "BREAKFAST"), ("t0", "LUNCH"), ("r1", "LUNCH"), ("t1", None), ("r2", "DINNER")]
+
+    visits = validate_selection(day_trip_plans(), selection(*items), candidates(), [])
+
+    assert visits[0][1].meal_type is None
+
+
+def test_only_one_market_per_day_as_a_tour():
+    pool = candidates() + [place(f"m{i}", "관광", 35.1605 + i * 0.0005, 129.0605, source_category="쇼핑 > 전통시장") for i in range(2)]
+    items = [("r0", "BREAKFAST"), ("m0", None), ("r1", "LUNCH"), ("m1", None), ("r2", "DINNER")]
+
+    with pytest.raises(InvalidModelOutput, match="시장은 하루에 관광지로 1곳"):
+        validate_selection(day_trip_plans(), selection(*items), pool, [])
+
+
+def test_restaurant_closed_at_meal_time_is_rejected():
+    pool = [p.model_copy(update={"open_time": "11:00", "close_time": "21:00"}) if p.provider_place_id == "r0" else p
+            for p in candidates()]
+
+    with pytest.raises(InvalidModelOutput, match="11:00~21:00 영업"):
+        validate_selection(day_trip_plans(), selection(*VALID), pool, [])
+
+
+def test_unknown_hours_are_allowed():
+    validate_selection(day_trip_plans(), selection(*VALID), candidates(), [])
+
+
+def test_late_night_hours_wrap_past_midnight():
+    bar = place("b", "식당", open_time="17:00", close_time="02:00")
+
+    assert bar.is_open_between(datetime(2026, 9, 19, 23, 0), datetime(2026, 9, 20, 0, 30)) is True
+    assert bar.is_open_between(datetime(2026, 9, 19, 12, 0), datetime(2026, 9, 19, 13, 0)) is False
+    assert place("c", "식당").is_open_between(datetime(2026, 9, 19, 8, 0), datetime(2026, 9, 19, 9, 0)) is None
+
+
+def test_restaurant_closed_on_that_weekday_is_rejected():
+    # 2026-09-19는 토요일입니다.
+    pool = [p.model_copy(update={"closed_days": ["토"]}) if p.provider_place_id == "r1" else p for p in candidates()]
+
+    with pytest.raises(InvalidModelOutput, match="토요일 휴무"):
+        validate_selection(day_trip_plans(), selection(*VALID), pool, [])
+
+
+def test_day_plans_tell_the_model_the_weekday():
+    assert plans_for()[0].summary()["weekday"] == "토"
+
+
+def test_meal_waits_for_a_restaurant_opening_within_90_minutes():
+    middle = plans_for()[1]
+    brunch = place("r1", "식당", open_time="10:00", close_time="21:00")
+
+    schedule = schedule_day(middle, [Visit(brunch, "BREAKFAST")], [0], 0)
+
+    assert schedule.visits[0].start.time() == time(10, 0)
+
+
+def test_restaurant_opening_too_late_is_still_rejected():
+    pool = [p.model_copy(update={"open_time": "11:00", "close_time": "21:00"}) if p.provider_place_id == "r0" else p
+            for p in candidates()]
+
+    with pytest.raises(InvalidModelOutput, match="11:00~21:00"):
+        validate_selection(day_trip_plans(), selection(*VALID), pool, [])

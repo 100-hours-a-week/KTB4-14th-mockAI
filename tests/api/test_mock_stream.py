@@ -94,3 +94,12 @@ def test_unknown_scenario_is_rejected(client):
 
     assert response.status_code == 400
     assert response.json()["message"] == "invalid_request"
+
+
+def test_breakfast_is_a_place_open_in_the_morning(client):
+    result = dict(events(client.post(MOCK_PATH, json=body(), headers=AUTH).text))["ROUTE_OPTIMIZE_DONE"]["result"]
+
+    breakfast = result["days"][1]["items"][0]
+    assert breakfast["meal_type"] == "BREAKFAST"
+    assert any(word in breakfast["place_name"] for word in ("국밥", "백반", "브런치", "해장"))
+    assert "market_name" not in breakfast

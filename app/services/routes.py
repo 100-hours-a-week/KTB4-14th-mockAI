@@ -9,7 +9,7 @@ from app.core.geo import same_place
 from app.core.logging import record
 from app.schemas.itinerary import CATEGORY_ITEM_TYPE, ItineraryDay, ItineraryItem, ItineraryResponse, Place
 from app.schemas.route import RouteDetails
-from app.services.scheduler import WALK_LIMIT_KM, DayPlan, Visit, schedule_day
+from app.services.scheduler import WALK_LIMIT_KM, DayPlan, Visit, closed_meals, schedule_day
 
 
 HOTEL_END_TIME = "23:59"
@@ -68,6 +68,10 @@ async def build_itinerary(
         except InvalidModelOutput as exc:
             record("route_schedule_failed", day_number=plan.day_number, shortage_minutes=getattr(exc, "minutes", None))
             raise GenerationFailed("이동시간 안에 일정을 배치할 수 없습니다.", reason="routes_do_not_fit") from exc
+        for closed in closed_meals(schedule):
+            record("restaurant_hours_conflict", day_number=plan.day_number, place=closed.place.place_name,
+                   at=closed.start.strftime("%H:%M"), hours=f"{closed.place.open_time}~{closed.place.close_time}",
+                   closed_days=closed.place.closed_days)
         if plan.transport == "WALK":
             walked = sum(r.distance_meter for r in [*incoming, to_hotel] if r) / 1000
             if walked > WALK_LIMIT_KM:
