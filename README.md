@@ -10,9 +10,9 @@ Audigo 여행 일정 생성 AI 서버(FastAPI)입니다.
 | 구분 | Method | 경로 | 설명 | 상태 |
 |---|---|---|---|---|
 | 공통 | GET | `/health` | 서버 상태 확인 | 완료 |
-| 실제 | POST | `/internal/ai/itineraries/generate` | 일정 생성 (JSON 응답) | 예정 |
-| 실제 | POST | `/api/ai/v1/itinerary-jobs/stream` | 일정 생성 (SSE 스트리밍) | 예정 |
-| 목업 | POST | `/mock/api/ai/v1/itinerary-jobs/stream` | 가짜 일정 생성 (SSE 스트리밍) | 예정 |
+| 실제 | POST | `/internal/ai/itineraries/generate` | 일정 생성 (JSON 응답) | 완료 |
+| 실제 | POST | `/api/ai/v1/itinerary-jobs/stream` | 일정 생성 (SSE 스트리밍) | 완료 |
+| 목업 | POST | `/mock/api/ai/v1/itinerary-jobs/stream` | 가짜 일정 생성 (SSE 스트리밍) | 완료 |
 
 - `/health`를 뺀 모든 API는 `Authorization: Bearer <AUDIGO_API_TOKEN>` 헤더가 필요합니다.
 - 백엔드는 환경변수 `AUDIGO_AI_SSE_PATH`만 바꾸면 실제 경로와 목업 경로를 전환할 수 있습니다.
@@ -40,6 +40,20 @@ PLACE_RECOMMEND_STARTED → PLACE_RECOMMEND_DONE
 | `unavailable` | 503 `ai_service_unavailable` |
 | `drop` | 결과 없이 스트림 종료 |
 
+## 일정 생성 로직
+
+자세한 설계는 [docs/design/itinerary-generation.md](docs/design/itinerary-generation.md)에 있습니다.
+
+- 요청은 백엔드 형식(`AiTravelGenerationRequest`) JSON 하나만 받습니다.
+- 우선순위: 사용자 커스텀 요청(`extra_request`) > 공통 필드(`preference`) > 서버 기본값
+- 00:00~07:00은 무조건 휴식입니다. 첫날은 도착 + 1시간부터, 마지막 날은 출발 − 1시간까지 일정을 둡니다.
+- 관광지 수(여유/균형/알차게): 최소 2/3/4, 최대 4/5/6. 짧은 날은 시간에 비례해 줄입니다.
+- 아침·점심·저녁을 08시·12시·18시 언저리에 추천합니다. 식당은 영업시간, 정기 휴무 요일, 대표 메뉴(카카오 공식 검색 참고)를 고려합니다.
+- 시장은 점심·저녁 자리에도 들어가며, 이때는 시장 안 식당(최상단 추천 가게)으로 표기합니다. 관광지로 넣는 시장은 하루 1곳까지입니다.
+- 숙소: 그날과 다음날이 모두 자동차면 밤마다 동선 중간 지점에서 새로 고릅니다. 그 밖에는 편도 1시간 이내면 같은 숙소를 유지합니다.
+- 모든 장소에 카카오 공식 검색(블로그·웹문서·카페)을 참고한 성인 1명 기준 가격(`price_info`)을 붙입니다. 관광 `성인 19,000원`, 식당 `1인분 평균 11,000원`, 숙소 `1박 120,000원`, 알 수 없으면 `확인 필요`입니다.
+- 프롬프트는 [app/prompts/itinerary.py](app/prompts/itinerary.py)에서 수정합니다.
+
 ## 실행 (Docker)
 
 로컬에 Python을 설치하지 않고 Docker로 실행합니다.
@@ -51,7 +65,7 @@ docker build -t audigo-mock-ai .
 docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 ```
 
-- Swagger: http://localhost:8000/docs
+- Swagger: http://localhost:8000/docs (`DOCS_USERNAME`/`DOCS_PASSWORD`로 로그인. 설정하지 않으면 문서 페이지가 열리지 않습니다)
 - Health: http://localhost:8000/health
 
 ## 환경변수
@@ -59,11 +73,13 @@ docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 | 이름 | 설명 |
 |---|---|
 | `AUDIGO_API_TOKEN` | 백엔드와 공유하는 Bearer 토큰 (32자 이상) |
-| `OPEN_API_KEY` | OpenAI API 키 (실제 경로, 예정) |
-| `OPENAI_MODEL` | 사용할 모델, 기본 `gpt-4o-mini` (예정) |
-| `KAKAO_REST_API_KEY` | 카카오 장소 검색·길찾기 키 (실제 경로, 예정) |
-| `MOCK_STAGE_DELAY_SECONDS` | 목업 단계 이벤트 사이 대기 시간(초) (예정) |
-| `MOCK_SCENARIO` | 목업 기본 실패 시나리오 (예정) |
+| `OPEN_API_KEY` | OpenAI API 키 (실제 경로) |
+| `OPENAI_MODEL` | 사용할 모델, 기본 `gpt-4o-mini` |
+| `KAKAO_REST_API_KEY` | 카카오 장소 검색·길찾기·검색(블로그·웹문서·카페) 키 (실제 경로) |
+| `DOCS_USERNAME` | Swagger·ReDoc·openapi.json 접근 아이디 |
+| `DOCS_PASSWORD` | 위 비밀번호 (8자 이상). 아이디·비밀번호 중 하나라도 없으면 문서 페이지를 열지 않습니다 |
+| `MOCK_STAGE_DELAY_SECONDS` | 목업 단계 이벤트 사이 대기 시간(초), 기본 1 |
+| `MOCK_SCENARIO` | 목업 기본 시나리오, 기본 `success`. 허용 값 밖이면 서버가 시작되지 않습니다. |
 
 ## 테스트
 
@@ -86,16 +102,16 @@ docker run --rm -v "$PWD":/app -w /app ghcr.io/astral-sh/uv:0.9.30-python3.12-bo
 ```
 app/
 ├── main.py            # 앱 생성, 미들웨어·예외 핸들러·라우터 등록
-├── core/              # 공통 설정
-│   ├── config.py      # .env / 환경변수 로딩
-│   ├── security.py    # Bearer 토큰 검증
-│   └── exceptions.py  # 예외 핸들러, 오류 응답 형식
+├── core/              # config, security, exceptions, logging, geo(거리·이동시간 추정)
 ├── api/
-│   └── routes/        # 엔드포인트 (health, 실제 일정, 목업 일정)
-├── schemas/           # 요청·응답 Pydantic 모델
+│   ├── deps.py        # 설정, 외부 의존성, X-Mock-Scenario
+│   └── routes/        # health, itinerary(실제), mock(목업)
+├── schemas/           # 요청·응답·LLM 입출력 Pydantic 모델
 ├── prompts/           # 모델 프롬프트 (커스텀은 여기서)
-├── clients/           # 외부 API 클라이언트 (OpenAI, 카카오)
-└── services/          # 일정 생성 로직, 목업 데이터 생성, SSE
+├── clients/           # OpenAI, 카카오(장소·길찾기·블로그), 목업용 가짜 카카오
+├── services/          # scheduler, planner, accommodation, routes, pricing, pipeline, mock_generator, streaming/
+└── docs/              # Swagger 예시
+docs/design/           # 설계 문서
 tests/
 ├── api/               # 엔드포인트 테스트
 └── services/          # 로직 테스트
