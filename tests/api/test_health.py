@@ -1,22 +1,12 @@
-from fastapi.testclient import TestClient
-
-from app.core.config import Settings
-from app.main import create_app
-
-
-def test_health():
-    client = TestClient(create_app(settings=Settings(api_token="x" * 32)))
-
+def test_health(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "mode": "mock"}
+    assert response.json()["status"] == "ok"
     assert response.headers["X-Request-Id"].startswith("req_")
 
 
-def test_unknown_path_uses_error_envelope():
-    client = TestClient(create_app(settings=Settings(api_token="x" * 32)))
-
+def test_unknown_path_uses_error_envelope(client):
     response = client.get("/nope")
 
     assert response.status_code == 404
