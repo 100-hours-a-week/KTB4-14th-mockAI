@@ -14,6 +14,7 @@
 
 - 음악 추천은 API·스트림 단계·응답 필드·코드에서 모두 제외합니다.
 - `/health`를 제외한 모든 API는 `Authorization: Bearer <AUDIGO_API_TOKEN>`이 필요합니다.
+- Swagger 문서(`/docs`, `/redoc`, `/openapi.json`)는 HTTP Basic 인증(`DOCS_USERNAME`, `DOCS_PASSWORD`)으로 보호합니다. 둘 중 하나라도 설정되지 않으면 문서 페이지를 열지 않습니다.
 - 백엔드는 `AUDIGO_AI_SSE_PATH`만 바꾸면 실제 경로와 목업 경로를 전환할 수 있습니다.
 
 ## 2. 요청·응답 형식

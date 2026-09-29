@@ -67,8 +67,8 @@ def test_too_short_trip_is_422_with_the_travel_plan_id():
 
 
 def test_openapi_lists_exactly_the_three_generation_routes():
-    with live_client() as client:
-        paths = client.get("/openapi.json").json()["paths"]
+    with live_client(docs_username="admin", docs_password="docs-password") as client:
+        paths = client.get("/openapi.json", auth=("admin", "docs-password")).json()["paths"]
 
     assert {p for p, methods in paths.items() if "post" in methods} == {
         GENERATE_PATH, STREAM_PATH, "/mock" + STREAM_PATH,

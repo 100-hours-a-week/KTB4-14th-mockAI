@@ -64,7 +64,7 @@ docker build -t audigo-mock-ai .
 docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 ```
 
-- Swagger: http://localhost:8000/docs
+- Swagger: http://localhost:8000/docs (`DOCS_USERNAME`/`DOCS_PASSWORD`로 로그인. 설정하지 않으면 문서 페이지가 열리지 않습니다)
 - Health: http://localhost:8000/health
 
 ## 환경변수
@@ -75,6 +75,8 @@ docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 | `OPEN_API_KEY` | OpenAI API 키 (실제 경로) |
 | `OPENAI_MODEL` | 사용할 모델, 기본 `gpt-4o-mini` |
 | `KAKAO_REST_API_KEY` | 카카오 장소 검색·길찾기·블로그 검색 키 (실제 경로) |
+| `DOCS_USERNAME` | Swagger·ReDoc·openapi.json 접근 아이디 |
+| `DOCS_PASSWORD` | 위 비밀번호 (8자 이상). 아이디·비밀번호 중 하나라도 없으면 문서 페이지를 열지 않습니다 |
 | `MOCK_STAGE_DELAY_SECONDS` | 목업 단계 이벤트 사이 대기 시간(초), 기본 1 |
 | `MOCK_SCENARIO` | 목업 기본 시나리오, 기본 `success`. 허용 값 밖이면 서버가 시작되지 않습니다. |
 
