@@ -30,7 +30,11 @@ class MockPlanner:
 
     async def select_places(self, context: dict, feedback: str | None) -> ModelSelection:
         candidates = context["candidates"]
-        required_ids = context["required_order"]
+        # 순서가 정해진 필수 장소 다음에 요청문에서 찾은 필수 장소(순서 없음)를 넣습니다.
+        required_ids = context["required_order"] + [
+            c["provider_place_id"] for c in candidates
+            if c["is_required"] and c["provider_place_id"] not in context["required_order"]
+        ]
         by_id = {c["provider_place_id"]: c for c in candidates}
         used = set(required_ids)
         required = [by_id[pid] for pid in required_ids]

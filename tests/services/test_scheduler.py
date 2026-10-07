@@ -232,3 +232,17 @@ def test_restaurant_opening_too_late_is_still_rejected():
 
     with pytest.raises(InvalidModelOutput, match="11:00~21:00"):
         validate_selection(day_trip_plans(), selection(*VALID), pool, [])
+
+
+def test_requested_places_must_be_included_in_any_order():
+    pool = candidates()
+    # 요청사항에서 찾은 장소는 required_order가 없고, 순서와 상관없이 포함만 되면 됩니다.
+    pool[0] = pool[0].model_copy(update={"is_required": True, "required_order": 1})
+    pool[1] = pool[1].model_copy(update={"is_required": True})
+    required = [pool[0], pool[1]]
+    reordered = [("r0", "BREAKFAST"), ("t1", None), ("r1", "LUNCH"), ("t0", None), ("r2", "DINNER")]
+
+    validate_selection(day_trip_plans(), selection(*reordered), pool, required)
+    missing = [("r0", "BREAKFAST"), ("t0", None), ("r1", "LUNCH"), ("t2", None), ("r2", "DINNER")]
+    with pytest.raises(InvalidModelOutput, match="장소 t1"):
+        validate_selection(day_trip_plans(), selection(*missing), pool, required)

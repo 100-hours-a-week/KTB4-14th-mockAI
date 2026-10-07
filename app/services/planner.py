@@ -90,11 +90,15 @@ async def interpret_custom_request(planner, request: TravelGenerationRequest, da
         "trip_dates": dates,
         "preference": request.preference.model_dump(exclude={"extra_request"}),
     }
-    try:
-        custom = await planner.parse_custom_request(context)
-    except InvalidModelOutput:
-        # 해석 결과가 형식에 맞지 않아도 생성은 계속합니다. 공통 필드는 그대로 적용됩니다.
-        record("custom_request_unparsed")
+    # 요청문의 장소는 필수 장소가 되므로 해석 실패 시 1번 더 시도합니다.
+    for attempt in range(2):
+        try:
+            custom = await planner.parse_custom_request(context)
+            break
+        except InvalidModelOutput:
+            record("custom_request_unparsed", attempt=attempt + 1)
+    else:
+        # 그래도 형식에 맞지 않으면 생성은 계속합니다. 공통 필드는 그대로 적용됩니다.
         return CustomRequest.empty()
     custom = custom.model_copy(update={"day_overrides": [o for o in custom.day_overrides if o.day_number <= len(dates)]})
     record("custom_request_parsed", overridden=[

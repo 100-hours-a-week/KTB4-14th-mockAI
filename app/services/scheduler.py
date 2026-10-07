@@ -326,10 +326,16 @@ def validate_selection(
             raise InvalidModelOutput(f"{day.date}: 시장은 하루에 관광지로 {MARKET_TOURS_PER_DAY}곳까지 넣을 수 있습니다 (현재 {market_tours})")
         result.append(visits)
 
-    required_ids = [p.provider_place_id for p in required if p.category != "숙소"]
-    visited = [v.place.provider_place_id for day in result for v in day if v.place.is_required]
-    if visited != required_ids:
+    # 요청 본문의 필수 장소는 순서까지, 요청문에서 찾은 필수 장소(required_order 없음)는 포함 여부만 봅니다.
+    ordered = [p for p in required if p.category != "숙소" and p.required_order is not None]
+    visited_ids = [v.place.provider_place_id for day in result for v in day]
+    ordered_ids = {p.provider_place_id for p in ordered}
+    if [pid for pid in visited_ids if pid in ordered_ids] != [p.provider_place_id for p in ordered]:
         raise InvalidModelOutput("필수 장소를 모두 required_order 순서대로 포함하세요")
+    missing = [p.place_name for p in required
+               if p.category != "숙소" and p.required_order is None and p.provider_place_id not in visited_ids]
+    if missing:
+        raise InvalidModelOutput("필수 장소를 빠짐없이 포함하세요: " + ", ".join(missing))
 
     for plan, visits in zip(plans, result):
         previous_hotel = None
