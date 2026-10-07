@@ -217,6 +217,27 @@ class KakaoPlaces:
             raise GenerationFailed("추천할 장소가 없습니다.", reason="no_place_candidates")
         return list(pool.values()), center
 
+    async def find_places(self, region_name: str, names: list[str]) -> list[Place | None]:
+        """이름으로 찾은 장소. 지역 안의 관광·식당·숙소 중 정확도순 첫 결과이고, 없으면 None입니다."""
+        region, _ = await self.region_center(region_name)
+        results = await asyncio.gather(*(
+            self._get("keyword", {"query": f"{region} {name}", "sort": "accuracy", "size": 15}) for name in names
+        ))
+        found = []
+        for documents in results:
+            match = None
+            for doc in documents:
+                category = GROUPS.get(doc.get("category_group_code", "")) or category_of(doc.get("category_name", ""))
+                if category is None or not in_region(region, doc.get("address_name", "")):
+                    continue
+                try:
+                    match = to_place(doc, category)
+                except (ValidationError, KeyError, TypeError, ValueError):
+                    continue
+                break
+            found.append(match)
+        return found
+
     async def accommodations(self, region_name: str, center, radius: int) -> list[Place]:
         documents = await self._get("category", {
             "category_group_code": "AD5", "x": center.longitude, "y": center.latitude,

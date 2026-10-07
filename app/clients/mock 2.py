@@ -66,19 +66,6 @@ class MockPlaces:
                 ))
         return pool, Coordinate(latitude=lat, longitude=lng)
 
-    async def find_places(self, region_name: str, names: list[str]) -> list[Place | None]:
-        # 목업은 어떤 이름이든 지역 중심 근처의 관광지로 찾아 줍니다.
-        lat, lng = region_center(region_name)
-        found = []
-        for name in names:
-            key = zlib.crc32(f"{self.seed}:{name}".encode())
-            y, x = scatter(random.Random(key), lat, lng, 2.0)
-            found.append(Place(
-                provider_place_id=f"mock-requested-{key}", place_name=name,
-                address=f"{region_name} 목업로", latitude=y, longitude=x, category="관광", source_category="명소",
-            ))
-        return found
-
     async def accommodations(self, region_name: str, center, radius: int) -> list[Place]:
         # 같은 중심 좌표면 같은 숙소가 나오므로 재사용·재검색 결과도 항상 같습니다.
         key = f"{center.latitude:.3f},{center.longitude:.3f}"

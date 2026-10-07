@@ -60,3 +60,25 @@ def test_out_of_range_day_overrides_are_dropped():
     custom = asyncio.run(interpret_custom_request(OpenAIPlanner(FakeOpenAI(reply)), request, ["2026-09-19", "2026-09-20"]))
 
     assert [o.day_number for o in custom.day_overrides] == [1]
+
+
+class FlakyPlanner:
+    def __init__(self, failures):
+        self.failures, self.calls = failures, 0
+
+    async def parse_custom_request(self, context):
+        self.calls += 1
+        if self.calls <= self.failures:
+            from app.core.exceptions import InvalidModelOutput
+            raise InvalidModelOutput("broken")
+        return CustomRequest.empty().model_copy(update={"places": ["해운대"]})
+
+
+def test_custom_request_is_retried_once_so_requested_places_are_not_lost():
+    request = request_model(preference={"extra_request": "해운대 꼭 가고 싶어요"})
+
+    planner = FlakyPlanner(failures=1)
+    custom = asyncio.run(interpret_custom_request(planner, request, ["2026-09-19"]))
+
+    assert planner.calls == 2
+    assert custom.places == ["해운대"]

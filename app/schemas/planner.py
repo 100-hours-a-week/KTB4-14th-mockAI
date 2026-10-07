@@ -24,11 +24,13 @@ class CustomRequest(StrictModel):
     themes: list[str] = Field(max_length=5)
     foods: list[str] = Field(max_length=5)
     avoid: list[str] = Field(max_length=10)
+    # 사용자가 가고 싶다고 적은 고유 장소명. 서버가 카카오에서 찾아 필수 장소로 넣습니다.
+    places: list[str] = Field(max_length=5)
     notes: str | None = Field(max_length=500)
 
     @classmethod
     def empty(cls) -> "CustomRequest":
-        return cls(day_overrides=[], start_time=None, return_time=None, themes=[], foods=[], avoid=[], notes=None)
+        return cls(day_overrides=[], start_time=None, return_time=None, themes=[], foods=[], avoid=[], places=[], notes=None)
 
 
 class SelectionItem(StrictModel):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.core.exceptions import GenerationFailed
 from app.core.geo import distance_km
+from app.core.logging import record
 from app.schemas.itinerary import PLACE_TYPE_CATEGORY, Place, TravelGenerationRequest
 
 
@@ -52,6 +53,39 @@ def required_places(request: TravelGenerationRequest) -> list[Place]:
             required_order=required.order if required.order is not None else index,
         ))
     return sorted(places, key=lambda p: p.required_order)
+
+
+def object_particle(word: str) -> str:
+    last = word[-1]
+    if "가" <= last <= "힣":
+        return "을" if (ord(last) - ord("가")) % 28 else "를"
+    return "을(를)"
+
+
+async def requested_places(places_client, region_name: str, names: list[str], required: list[Place]) -> list[Place]:
+    """요청문에 적힌 장소를 카카오에서 찾아 필수 장소로 만듭니다. 순서는 정하지 않습니다(required_order 없음).
+
+    필수 장소이므로 하나라도 찾지 못하면 일정을 만들지 않습니다.
+    """
+    names = list(dict.fromkeys(name.strip() for name in names if name.strip()))
+    if not names:
+        return []
+    found = await places_client.find_places(region_name, names)
+    known = {p.provider_place_id for p in required}
+    result = []
+    for name, place in zip(names, found):
+        if place is None:
+            record("requested_place_not_found", requested=len(names))
+            raise GenerationFailed(
+                f"요청사항의 장소 '{name}'{object_particle(name)} 찾지 못했습니다. 필수 장소에서 선택해주세요.",
+                reason="requested_place_not_found",
+            )
+        if place.provider_place_id in known:
+            continue
+        known.add(place.provider_place_id)
+        result.append(place.model_copy(update={"is_required": True, "required_order": None}))
+    record("requested_places_resolved", requested=len(names), added=len(result))
+    return result
 
 
 def select_candidates(

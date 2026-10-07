@@ -10,7 +10,7 @@ from app.core.logging import record, timed
 from app.schemas.itinerary import TravelGenerationRequest
 from app.services.accommodation import TRANSPORT_RANK, assign_accommodations
 from app.services.market_meals import resolve_market_meals
-from app.services.places import required_places, select_candidates
+from app.services.places import requested_places, required_places, select_candidates
 from app.services.planner import interpret_custom_request, recommend_places
 from app.services.pricing import PriceTarget, lookup_prices, with_prices
 from app.services.restaurant_info import enrich_restaurants
@@ -35,6 +35,8 @@ async def generation_stages(request: TravelGenerationRequest, providers: Provide
     dates = [(arrival.date() + timedelta(days=i)).isoformat() for i in range((departure.date() - arrival.date()).days + 1)]
     with timed("custom_request"):
         custom = await interpret_custom_request(providers.planner, request, dates)
+    with timed("requested_places"):
+        required += await requested_places(providers.places, request.region_name, custom.places, required)
     plans = build_day_plans(request, custom)
     validate_generation_window(plans, required)
     search = PlaceSearch(
