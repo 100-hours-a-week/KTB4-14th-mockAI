@@ -30,13 +30,13 @@ class MockPlanner:
 
     async def select_places(self, context: dict, feedback: str | None) -> ModelSelection:
         candidates = context["candidates"]
-        required_ids = [c["provider_place_id"] for c in candidates if c["is_required"]]
+        required_ids = context["required_order"]
         by_id = {c["provider_place_id"]: c for c in candidates}
         used = set(required_ids)
         required = [by_id[pid] for pid in required_ids]
         plans = context["day_plans"]
 
-        # 필수 장소는 후보 순서대로, 자리가 남은 가장 이른 날에 넣습니다.
+        # 필수 장소는 순서대로, 자리가 남은 가장 이른 날에 넣습니다.
         assigned = [{"관광": [], "식당": []} for _ in plans]
         day = 0
         for place in required:

@@ -130,7 +130,6 @@ def build_selection_context(
         },
         "day_plans": [p.summary() for p in plans],
         "stay_minutes": STAY_MINUTES,
-        "required_order": [p.provider_place_id for p in required if p.category != "숙소"],
         "candidates": [
             {
                 "provider_place_id": p.provider_place_id, "place_name": p.place_name, "category": p.category,

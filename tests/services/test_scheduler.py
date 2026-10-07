@@ -132,13 +132,12 @@ def test_invalid_selection_explains_what_to_fix(items, message):
         validate_selection(day_trip_plans(), selection(*items), candidates(), [])
 
 
-def test_required_places_must_keep_their_order():
+def test_required_places_do_not_have_to_keep_their_order():
     pool = candidates()
     pool[0] = pool[0].model_copy(update={"is_required": True, "required_order": 2})
     pool[1] = pool[1].model_copy(update={"is_required": True, "required_order": 1})
 
-    with pytest.raises(InvalidModelOutput, match="필수 장소"):
-        validate_selection(day_trip_plans(), selection(*VALID), pool, [pool[1], pool[0]])
+    validate_selection(day_trip_plans(), selection(*VALID), pool, [pool[1], pool[0]])
 
 
 def test_walking_day_is_capped_at_50km():
@@ -236,7 +235,7 @@ def test_restaurant_opening_too_late_is_still_rejected():
 
 def test_requested_places_must_be_included_in_any_order():
     pool = candidates()
-    # 요청사항에서 찾은 장소는 required_order가 없고, 순서와 상관없이 포함만 되면 됩니다.
+    # 본문 필수 장소(required_order 있음)와 요청문에서 찾은 장소(없음) 모두 순서와 상관없이 포함만 되면 됩니다.
     pool[0] = pool[0].model_copy(update={"is_required": True, "required_order": 1})
     pool[1] = pool[1].model_copy(update={"is_required": True})
     required = [pool[0], pool[1]]
