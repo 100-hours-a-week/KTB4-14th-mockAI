@@ -181,7 +181,7 @@ id:7 complete                  {travel_plan_id, stage:"COMPLETE", status:"COMPLE
 
 - 최종 일정은 `ROUTE_OPTIMIZE_DONE`에 한 번만 담습니다.
 - 10초마다 `: keep-alive`, 300초가 지나면 `error`를 보냅니다.
-- 실패하면 `error {travel_plan_id, stage, status:"FAILED", message, data:{error_message}}`를 보내고 종료합니다.
+- 실패하면 `error {travel_plan_id, stage, status:"FAILED", message, data:{error_message, reason}}`를 보내고 종료합니다. `reason`은 [7. 오류 응답](#7-오류-응답)의 안내 문구이고, 없으면 `null`입니다.
 
 ## 6. 목업 경로
 
@@ -193,7 +193,7 @@ id:7 complete                  {travel_plan_id, stage:"COMPLETE", status:"COMPLE
 | 값 | 동작 |
 |---|---|
 | `success` (기본값) | 정상 완료 |
-| `fail_place` / `fail_stay` / `fail_route` | 해당 단계에서 `error` 이벤트 |
+| `fail_place` / `fail_stay` / `fail_route` | 해당 단계에서 `error` 이벤트. `reason`은 각각 1번·4번·3번 안내 문구 |
 | `unavailable` | 503 `ai_service_unavailable` |
 | `drop` | 결과 없이 스트림 종료 |
 
@@ -205,10 +205,34 @@ id:7 complete                  {travel_plan_id, stage:"COMPLETE", status:"COMPLE
 |---|---|---|
 | `invalid_request` | 400 | 요청 형식 오류. `필드: 이유` 형식으로 최대 5개 (예: `departure_datetime: arrival_datetime보다 늦어야 합니다.`). 입력 값은 담지 않음 |
 | `unauthorized` | 401 | 토큰 없음 또는 불일치 |
-| `ai_itinerary_generation_failed` | 422 | 시간 부족, 후보 없음, 숙소 없음, 배치 불가 (`data`에 `travel_plan_id` 포함) |
+| `ai_itinerary_generation_failed` | 422 | 시간 부족, 후보 없음, 숙소 없음, 배치 불가 (`data`에 `travel_plan_id`, `reason` 포함) |
 | `ai_service_unavailable` | 503 | 외부 API 장애, 키 없음, 타임아웃 |
 | `routing_service_unavailable` | 503 | 길찾기 장애 |
 | `internal_server_error` | 500 | 예상하지 못한 오류 |
+
+### 422 안내 문구 (`data.reason`)
+
+422 응답은 `error_message`(무엇이 실패했는지)와 함께, 무엇을 바꿔 보면 되는지 알려주는 `reason`을 담습니다. 문구는 `app/core/exceptions.py`의 `GUIDE_*` 상수이고, 해당하는 문구가 없으면 `null`입니다 (`region_not_found`, `ambiguous_region`, `required_hotel_unfit`, `required_place_details_missing`, `requested_place_not_found`, `routes_do_not_fit` 등). 내부 reason 코드는 로그에만 남깁니다.
+
+```json
+{"message": "ai_itinerary_generation_failed",
+ "data": {"travel_plan_id": 10, "error_message": "필수 장소가 너무 많습니다.",
+          "reason": "선택한 일정 강도로는 필수 방문지를 모두 넣을 수 없습니다. 일정 강도를 조정해주세요."}}
+```
+
+| # | 안내 문구 | 내부 코드 | 언제 |
+|---|---|---|---|
+| 1 | 선택한 지역과 테마로 추천할 장소를 찾지 못했습니다. 테마를 줄이거나 다른 테마를 선택해 보세요. | `no_place_candidates` | 장소 후보가 없을 때 |
+| 2 | 일정 주변에서 식사할 식당을 찾지 못했습니다. 선호 음식을 다르게 선택하거나 이동 범위를 넓혀 보세요. | `no_restaurant_candidates` | 식당 후보가 없을 때 |
+| 3 | 도보 여행에서 적절한 일정을 제작할 수 없습니다. 대중교통이나 자동차 이동을 선택해 보세요. | `walking_limit` / `accommodation_unavailable` / `place_selection_failed` | 최종 도보 거리 초과, 도보인 날 숙소 없음, 장소 선택이 마지막에 도보 상한으로 실패 |
+| 4 | 일정 동선 근처에서 적절한 숙소를 찾지 못했습니다. 필수 방문지를 줄이거나 숙소를 직접 지정해주세요. | `accommodation_unavailable` | 도보가 아닌 날 숙소 없음 |
+| 5 | 입력한 요청사항으로는 일정을 만들 수 없습니다. 추가 요청사항을 수정해 주세요. | `model_refusal` | 모델이 응답을 거부 (추가 요청사항이 없어도 같은 문구) |
+| 6 | 여행 기간에 비해 방문할 장소가 너무 많아 일정을 모두 소화할 수 없습니다. 필수 방문지를 줄이거나 여행 기간을 늘려 보세요. | `too_many_required_places` / `place_selection_failed` | PACKED로도 필수 장소가 안 들어감, 장소 선택이 마지막에 시간 부족으로 실패 |
+| 7 | 선택한 일정 강도로는 필수 방문지를 모두 넣을 수 없습니다. 일정 강도를 조정해주세요. | `too_many_required_places` | 지금 강도로는 안 들어가지만 PACKED면 들어감 |
+| 8 | 추가 요청사항('{요약}')에 따른 일정 소화가 불가능합니다. 요청사항을 완화해 주세요. | `too_many_required_places` | 추가 요청사항을 빼면 들어감. 요약은 `extra_request` 앞 20자 (넘으면 `…`) |
+| 9 | 여행 시간이 너무 짧아 일정을 만들 수 없습니다. 도착·출발 시각을 확인해 주세요. | `insufficient_trip_time` | 날짜별 활동 가능 시간(도착 + 1시간 ~ 출발 − 1시간, 00:00~07:00 제외) 합이 4시간 이하 (`MIN_TRIP_MINUTES`) |
+
+6·7·8·9번은 `validate_generation_window`가 고릅니다. 활동 가능 시간이 4시간 이하면 바로 9번입니다. 필수 장소가 넘치면 LLM 없이 `build_day_plans`로 다시 계산해 ① 추가 요청사항(요청문에서 찾은 장소 포함)을 빼고 들어가면 8번 ② 모든 날을 PACKED로 바꿔 들어가면 7번 ③ 나머지는 6번입니다.
 
 ## 8. 로그
 

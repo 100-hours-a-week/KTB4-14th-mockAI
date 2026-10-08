@@ -1,4 +1,5 @@
 """복사해서 쓸 수 있는 Swagger 예시. 값은 설명용이며 실제 추천 결과가 아닙니다."""
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION
 from app.services.streaming.sse import encode_event
 
 
@@ -28,7 +29,9 @@ ERROR_EXAMPLES = {
     400: {"description": "요청 형식 오류", "value": {"message": "invalid_request", "data": {"error_message": "region_id: 필수 값입니다."}}},
     401: {"description": "Bearer 토큰 없음 또는 불일치", "value": {"message": "unauthorized", "data": None}},
     422: {"description": "조건에 맞는 일정을 만들지 못함",
-          "value": {"message": "ai_itinerary_generation_failed", "data": {"travel_plan_id": 10, "error_message": "숙소를 찾지 못했습니다."}}},
+          "value": {"message": "ai_itinerary_generation_failed", "data": {
+              "travel_plan_id": 10, "error_message": "숙소를 찾지 못했습니다.", "reason": GUIDE_NO_ACCOMMODATION,
+          }}},
     500: {"description": "서버 내부 오류", "value": {"message": "internal_server_error", "data": None}},
     503: {"description": "외부 API 장애, 키 없음, 시간 초과",
           "value": {"message": "ai_service_unavailable", "data": {"error_message": "잠시 후 다시 시도해주세요."}}},
@@ -50,7 +53,8 @@ STREAM_RESPONSE = {
         "complete": {"value": encode_event("complete", 7, {"travel_plan_id": 10, "stage": "COMPLETE", "status": "COMPLETED"})},
         "error": {"value": encode_event("error", 4, {
             "travel_plan_id": 10, "stage": "STAY_RECOMMEND", "status": "FAILED",
-            "message": "ai_itinerary_generation_failed", "data": {"error_message": "숙소를 찾지 못했습니다."},
+            "message": "ai_itinerary_generation_failed",
+            "data": {"error_message": "숙소를 찾지 못했습니다.", "reason": GUIDE_NO_ACCOMMODATION},
         })},
     }}},
 }

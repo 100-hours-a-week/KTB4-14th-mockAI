@@ -44,7 +44,7 @@ async def backend_stream(generator, settings, request_id: str, travel_plan_id: i
             failed_stage, error = status, result
             yield encode_event("error", sequence, {
                 **identity, "stage": STAGE_NAMES.get(failed_stage, failed_stage), "status": "FAILED",
-                "message": error.code, "data": {"error_message": error.message},
+                "message": error.code, "data": {"error_message": error.message, "reason": error.guide},
             })
             return
         if stage == "ROUTES" and status == "COMPLETED":

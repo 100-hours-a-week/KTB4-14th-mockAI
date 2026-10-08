@@ -12,7 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.core.exceptions import GenerationFailed, ServiceUnavailable
+from app.core.exceptions import GUIDE_NO_PLACES, GenerationFailed, ServiceUnavailable
 from app.core.logging import record
 from app.schemas.itinerary import Place
 from app.schemas.route import Coordinate
@@ -214,7 +214,7 @@ class KakaoPlaces:
         record("place_collection", canonical_region=region, radius=radius, anchors=len(anchors),
                fallback_groups=missing, accepted=counts, **stats)
         if not pool:
-            raise GenerationFailed("추천할 장소가 없습니다.", reason="no_place_candidates")
+            raise GenerationFailed("추천할 장소가 없습니다.", reason="no_place_candidates", guide=GUIDE_NO_PLACES)
         return list(pool.values()), center
 
     async def find_places(self, region_name: str, names: list[str]) -> list[Place | None]:

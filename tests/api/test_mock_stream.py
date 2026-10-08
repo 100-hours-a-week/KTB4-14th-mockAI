@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION
 from app.main import create_app
 from tests.conftest import AUTH, MOCK_PATH, TOKEN, body, events
 
@@ -64,6 +65,7 @@ def test_header_scenario_fails_the_requested_stage(client):
     assert error["stage"] == "STAY_RECOMMEND"
     assert error["message"] == "ai_itinerary_generation_failed"
     assert error["travel_plan_id"] == 10
+    assert error["data"] == {"error_message": "목업 실패 시나리오입니다.", "reason": GUIDE_NO_ACCOMMODATION}
 
 
 def test_environment_scenario_applies_unless_the_header_overrides_it():

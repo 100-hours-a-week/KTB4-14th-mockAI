@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from app.core.exceptions import GenerationFailed, InvalidModelOutput
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION, GUIDE_WALKING, GenerationFailed, InvalidModelOutput
 from app.core.geo import travel_minutes
 from app.core.logging import record
 from app.schemas.itinerary import Place
@@ -106,5 +106,6 @@ async def assign_accommodations(
         if hotels[index] is None:
             record("accommodation_unavailable", day_number=plan.day_number, radius=radius,
                    candidates=len(tried), rejections=rejections[:15])
-            raise GenerationFailed("숙소를 찾지 못했습니다.", reason="accommodation_unavailable")
+            raise GenerationFailed("숙소를 찾지 못했습니다.", reason="accommodation_unavailable",
+                                   guide=GUIDE_WALKING if mode == "WALK" else GUIDE_NO_ACCOMMODATION)
     return hotels

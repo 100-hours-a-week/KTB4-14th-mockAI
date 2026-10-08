@@ -6,7 +6,7 @@ import math
 import re
 
 from app.clients.mock import MockPlaces, MockRoutes, MockSearch
-from app.core.exceptions import GenerationFailed
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION, GUIDE_NO_PLACES, GUIDE_WALKING, GenerationFailed
 from app.core.geo import distance_km
 from app.schemas.itinerary import TravelGenerationRequest
 from app.schemas.planner import (
@@ -16,6 +16,8 @@ from app.services.pipeline import Providers, generation_stages
 
 
 FAIL_STAGES = {"fail_place": "PLACES", "fail_stay": "ACCOMMODATIONS", "fail_route": "ROUTES"}
+# 실패 시나리오마다 실제 경로에서 그 단계가 실패할 때 나가는 안내 문구를 씁니다.
+FAIL_GUIDES = {"fail_place": GUIDE_NO_PLACES, "fail_stay": GUIDE_NO_ACCOMMODATION, "fail_route": GUIDE_WALKING}
 PRICE = re.compile(r"[\d,]+원")
 HOURS = re.compile(r"영업시간 (\d\d:\d\d)~(\d\d:\d\d)")
 MENU = re.compile(r"대표 메뉴 (\S+)")
@@ -129,6 +131,6 @@ async def mock_stages(request: TravelGenerationRequest, scenario: str, delay_sec
         if status == "STARTED":
             await asyncio.sleep(delay_seconds)
             if stage == fail_stage:
-                raise GenerationFailed("목업 실패 시나리오입니다.", reason=scenario)
+                raise GenerationFailed("목업 실패 시나리오입니다.", reason=scenario, guide=FAIL_GUIDES[scenario])
             if scenario == "drop" and stage == "ROUTES":
                 return
