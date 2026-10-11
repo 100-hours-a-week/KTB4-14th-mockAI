@@ -65,10 +65,6 @@ def test_recommend_filters_self_gender_and_opposite_pace_but_keeps_zero_overlap(
     assert result.response.model_dump() == {
         "candidates": [{
             "user_id": 4,
-            "nickname": "zero",
-            "profile_image_url": "image",
-            "theme": ["SNS"],
-            "pace": "BALANCED",
             "match_rate": 10,
         }],
         "count": 1,
@@ -106,17 +102,18 @@ def test_ordering_is_score_then_original_nickname_then_user_id_and_input_order_i
         candidate(5, " alpha", ["NATURE", "FOOD"], "RELAXED"),
         candidate(4, "low", ["NATURE"], "RELAXED"),
     ]
-    expected = [(5, " alpha", 100), (6, " alpha", 100), (7, "beta", 100)]
+    expected = [(5, 100), (6, 100), (7, 100)]
 
     for order in permutations(candidates):
         result = recommend_request(request(candidates=list(order)))
         assert [
-            (item.user_id, item.nickname, item.match_rate) for item in result.response.candidates
+            (item.user_id, item.match_rate)
+            for item in result.response.candidates
         ] == expected
         assert result.filtered_count == 4
 
 
-def test_response_cards_preserve_original_metadata_and_theme_order():
+def test_response_cards_keep_only_backend_join_keys_and_scores():
     payload = request(candidates=[candidate(
         2,
         "  Na Na  ",
@@ -127,9 +124,9 @@ def test_response_cards_preserve_original_metadata_and_theme_order():
 
     result = recommend_request(payload)
     card = result.response.candidates[0]
-    assert card.nickname == "  Na Na  "
-    assert card.profile_image_url == "  https://example.test/profile  "
-    assert card.theme == ["REST", "NATURE", "FOOD"]
+    assert card.user_id == 2
+    assert card.match_rate == 100
+    assert set(card.model_dump()) == {"user_id", "match_rate"}
 
 
 def test_budget_is_validated_but_does_not_change_ranking():

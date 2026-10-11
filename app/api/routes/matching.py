@@ -65,9 +65,9 @@ RequestBody = Annotated[MatchingRequest, Body(openapi_examples={
     "/api/ai/v1/matches/candidates",
     response_model=MatchingResponse,
     responses={**ERROR_RESPONSES, 200: {"content": {"application/json": {"example": RESPONSE_EXAMPLE}}}},
-    summary="성별·여행 속도 필터와 테마 점수 기반 후보 카드 추천",
+    summary="성별·여행 속도 필터와 테마 점수 기반 후보 점수 추천",
     description=(
-        "request 내부의 성별 선호·여행 속도로 필터링하고 테마·속도 점수로 최대 3명의 실제 후보 카드를 반환합니다. "
+        "request 내부의 성별 선호·여행 속도로 필터링하고 테마·속도 점수로 최대 3명의 후보 user_id와 match_rate를 반환합니다. "
         "예산은 검증만 하며 추천 점수·필터에는 사용하지 않습니다. "
         "후보 상한은 MATCHING_MAX_CANDIDATES 설정을 따릅니다. 초과 시 자르지 않고 거부합니다."
     ),

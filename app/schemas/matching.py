@@ -86,15 +86,9 @@ class MatchingRequest(StrictModel):
 
 
 class MatchingCard(StrictModel):
-    """A matching result card copied from a validated input candidate."""
-
-    model_config = ConfigDict(str_strip_whitespace=False)
+    """A matching score result for a backend-owned user profile."""
 
     user_id: PositiveInt
-    nickname: str = Field(min_length=1, max_length=500)
-    profile_image_url: str | None = None
-    theme: list[Theme] = Field(min_length=1, max_length=4)
-    pace: Pace
     match_rate: int = Field(ge=0, le=100)
 
 

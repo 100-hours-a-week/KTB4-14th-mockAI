@@ -122,17 +122,16 @@ def test_old_flat_contract_is_rejected(client):
 
 
 @pytest.mark.parametrize("image", [None, "", "  https://EXAMPLE.invalid/A%2Fb?x=1&x=2  "])
-def test_response_copies_original_profile_metadata_and_theme_order(client, image):
+def test_response_returns_only_candidate_ids_and_scores(client, image):
     payload = matching_body()
     candidate = payload["candidates"][0]
     candidate.update(nickname="  나나\t", profile_image_url=image, theme=["REST", "FOOD", "NATURE"])
     response = client.post(PATH, json=payload, headers=AUTH)
     assert response.status_code == 200
     assert response.json()["candidates"][0] == {
-        "user_id": candidate["user_id"], "nickname": candidate["nickname"], "profile_image_url": image,
-        "theme": candidate["theme"], "pace": candidate["pace"], "match_rate": 100,
+        "user_id": candidate["user_id"], "match_rate": 100,
     }
-    assert set(response.json()["candidates"][0]) == {"user_id", "nickname", "profile_image_url", "theme", "pace", "match_rate"}
+    assert set(response.json()["candidates"][0]) == {"user_id", "match_rate"}
 
 
 def test_missing_profile_image_is_returned_as_explicit_null(client):
@@ -156,7 +155,6 @@ def test_nickname_sort_uses_original_whitespace_and_limit_after_all_filters(clie
     assert response.status_code == 200
     data = response.json()
     assert [candidate["user_id"] for candidate in data["candidates"]] == [20, 30, 40]
-    assert [candidate["nickname"] for candidate in data["candidates"]] == [" alpha", " alpha", "alpha"]
     assert data["count"] == 3
 
 
@@ -321,12 +319,12 @@ def test_openapi_has_typed_contract_and_matching_error_schema():
         assert integer_schema["maximum"] == 3000000
     assert set(schema["components"]["schemas"]["MatchingResponse"]["properties"]) == {"candidates", "count"}
     card = schema["components"]["schemas"]["MatchingCard"]
-    assert set(card["properties"]) == {"user_id", "nickname", "profile_image_url", "theme", "pace", "match_rate"}
+    assert set(card["properties"]) == {"user_id", "match_rate"}
     # OpenAPI encoding also removes nulls within example dictionaries. Check
     # the supplied example without weakening the actual HTTP null-key contract.
     documented_request = copy.deepcopy(swagger_request)
     documented_response = copy.deepcopy(operation["responses"]["200"]["content"]["application/json"]["example"])
-    for candidate in documented_request["candidates"] + documented_response["candidates"]:
+    for candidate in documented_request["candidates"]:
         candidate.setdefault("profile_image_url", None)
     assert documented_request == REQUEST_EXAMPLE
     assert documented_response == RESPONSE_EXAMPLE

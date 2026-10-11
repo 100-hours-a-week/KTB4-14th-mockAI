@@ -23,10 +23,8 @@ REQUEST_EXAMPLE = {
 }
 RESPONSE_EXAMPLE = {
     "candidates": [
-        {"user_id": 23, "nickname": "나나", "profile_image_url": None,
-         "theme": ["NATURE", "FOOD", "REST"], "pace": "RELAXED", "match_rate": 100},
-        {"user_id": 24, "nickname": "다다", "profile_image_url": None,
-         "theme": ["NATURE", "CULTURE"], "pace": "BALANCED", "match_rate": 50},
+        {"user_id": 23, "match_rate": 100},
+        {"user_id": 24, "match_rate": 50},
     ],
     "count": 2,
 }

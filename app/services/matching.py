@@ -56,10 +56,6 @@ def recommend(
     cards = [
         MatchingCard(
             user_id=candidate.user_id,
-            nickname=candidate.nickname,
-            profile_image_url=candidate.profile_image_url,
-            theme=candidate.theme,
-            pace=candidate.pace,
             match_rate=rate,
         )
         for rate, _, _, candidate in selected

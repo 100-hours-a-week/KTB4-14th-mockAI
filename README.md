@@ -60,7 +60,7 @@ PLACE_RECOMMEND_STARTED → PLACE_RECOMMEND_DONE
 [BE 계약 반영 매칭 설계안](docs/design/audigo-matching-ai-score-spec-be-aligned.md)에 따른 **규칙 기반 추천**입니다. LLM·카카오·DB·큐를 사용하지 않으며, `AUDIGO_API_TOKEN`만 설정하면 외부 API 키 없이 사용할 수 있습니다. 여행 일정 파이프라인과 독립적으로 실행합니다.
 
 - 최상위는 `request`, `candidates`, 선택 `limit`입니다. 요청자 ID·테마·속도·성별 선호·예산은 `request` 안에 전달합니다. 이전 최상위 조건 형식은 지원하지 않습니다.
-- BE가 실제 후보 목록과 필수 닉네임·성별을 공급합니다. `profile_image_url`은 문자열 또는 null이며 생략하면 null입니다. AI는 입력 후보의 닉네임·이미지·전체 테마·속도를 복사하여 카드를 반환하며 프로필을 생성·조회하지 않습니다.
+- BE가 실제 후보 목록과 필수 닉네임·성별을 공급합니다. 닉네임은 동점 정렬에만 사용하며, AI는 최종 후보의 `user_id`와 `match_rate`만 반환합니다. 프로필 조회와 화면용 후보 정보 조립은 BE가 담당합니다.
 - `request.preferred_companion_gender`는 `ANY`, `FEMALE`, `MALE`입니다. 후보 `gender`는 `FEMALE` 또는 `MALE`이고, 요청 조건과 맞지 않으면 제외합니다. 성별은 점수에 가산하지 않습니다.
 - 노출 동의·계정 상태·현재 채팅 상대 제외, 작업 관리·결과 저장·알림은 BE 책임입니다.
 - 테마 점수는 `교집합 수 / 요청 테마 수`입니다. 후보의 추가 테마는 감점하지 않습니다.
@@ -84,21 +84,21 @@ curl -sS http://localhost:8000/api/ai/v1/matches/candidates \
   -d '{"request":{"matching_request_id":10,"user_id":1,"preferred_companion_gender":"FEMALE","theme":["NATURE","FOOD"],"pace":"RELAXED","budget_min":100000,"budget_max":800000},"candidates":[{"user_id":23,"nickname":"나나","profile_image_url":null,"gender":"FEMALE","theme":["NATURE","FOOD","REST"],"pace":"RELAXED"},{"user_id":24,"nickname":"다다","profile_image_url":null,"gender":"FEMALE","theme":["NATURE","CULTURE"],"pace":"BALANCED"},{"user_id":25,"nickname":"라라","gender":"MALE","theme":["NATURE","FOOD"],"pace":"RELAXED"}]}'
 ```
 
-예상 응답은 `candidates/count` JSON입니다. 후보 25는 성별 조건으로 제외됩니다. FE용 `message/data` 래퍼와 요청 ID·계산 버전은 성공 응답에 추가하지 않습니다.
+예상 응답은 `candidates/count` JSON입니다. 후보 25는 성별 조건으로 제외됩니다. FE용 `message/data` 래퍼와 요청 ID·계산 버전, 닉네임·프로필 이미지는 성공 응답에 추가하지 않습니다.
 
 ```json
 {
   "candidates": [
-    {"user_id":23,"nickname":"나나","profile_image_url":null,"theme":["NATURE","FOOD","REST"],"pace":"RELAXED","match_rate":100},
-    {"user_id":24,"nickname":"다다","profile_image_url":null,"theme":["NATURE","CULTURE"],"pace":"BALANCED","match_rate":50}
+    {"user_id":23,"match_rate":100},
+    {"user_id":24,"match_rate":50}
   ],
   "count": 2
 }
 ```
 
-BE 후보 DTO에 닉네임·이미지 공급이 필요하므로, 이 구현만으로 실제 BE 연동이 완료된 것은 아닙니다. BE의 4xx·5xx 처리 때문에 AI의 422가 FE에 그대로 전달된다고 가정하지 않습니다. 예산 미반영 정책·후보 상한은 BE·제품 담당과 합의해야 합니다.
+BE 후보 DTO에 닉네임 공급이 필요하므로, 닉네임이 빠진 요청은 검증에서 실패합니다. BE의 4xx·5xx 처리 때문에 AI의 422가 FE에 그대로 전달된다고 가정하지 않습니다. 예산 미반영 정책·후보 상한은 BE·제품 담당과 합의해야 합니다.
 
-닉네임은 주변 공백을 포함한 **원문 그대로 정렬·반환**합니다. 공백뿐인 값만 거부하며 별도 대소문자·한글 정규화는 하지 않습니다. 이미지 문자열과 테마 순서도 그대로 보존합니다. `matching_request_id`, 입력·필터 후·반환 후보 수, 처리 시간, `ranking_version=theme-pace-v1`은 내부 로그에 기록하되 후보 개인정보·토큰은 기록하지 않습니다.
+닉네임은 주변 공백을 포함한 **원문 그대로 정렬**합니다. 공백뿐인 값만 거부하며 별도 대소문자·한글 정규화는 하지 않습니다. `matching_request_id`, 입력·필터 후·반환 후보 수, 처리 시간, `ranking_version=theme-pace-v1`은 내부 로그에 기록하되 후보 개인정보·토큰은 기록하지 않습니다.
 
 대용량 입력 방어를 위해 닉네임은 원문 기준 최대 500자, 본문은 기본 2MiB로 제한합니다. 본문은 청크 전송을 포함해 JSON 디코딩 **전** 바이트 수로 검사하고 초과 시 422를 반환합니다. 두 값은 초기 구현용 안전 상한이지 확정된 BE 프로필 계약은 아니며, 연동 시 조정합니다. 운영 프록시의 요청 크기·속도·읽기 시간 제한은 별도로 적용해야 합니다.
 
