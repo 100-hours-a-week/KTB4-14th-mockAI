@@ -66,10 +66,11 @@ def test_too_short_trip_is_422_with_the_travel_plan_id():
                                "data": {"travel_plan_id": 10, "error_message": "여행 시간이 너무 짧습니다."}}
 
 
-def test_openapi_lists_exactly_the_three_generation_routes():
+def test_openapi_lists_generation_and_matching_routes():
     with live_client(docs_username="admin", docs_password="docs-password") as client:
         paths = client.get("/openapi.json", auth=("admin", "docs-password")).json()["paths"]
 
     assert {p for p, methods in paths.items() if "post" in methods} == {
         GENERATE_PATH, STREAM_PATH, "/mock" + STREAM_PATH,
+        "/api/ai/v1/matches/candidates",
     }
