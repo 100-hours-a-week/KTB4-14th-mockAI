@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 
 from app.core.config import Settings
-from app.core.exceptions import GenerationFailed, InvalidModelOutput, ServiceUnavailable
+from app.core.exceptions import GUIDE_REQUEST_REFUSED, GenerationFailed, InvalidModelOutput, ServiceUnavailable
 
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -42,7 +42,7 @@ class OpenAIClient:
             choice = response.json()["choices"][0]
             message = choice["message"]
             if message.get("refusal"):
-                raise GenerationFailed("일정을 생성할 수 없는 조건입니다.", reason="model_refusal")
+                raise GenerationFailed("일정을 생성할 수 없는 조건입니다.", reason="model_refusal", guide=GUIDE_REQUEST_REFUSED)
             if choice.get("finish_reason") != "stop" or not isinstance(message.get("content"), str):
                 raise InvalidModelOutput("model response is incomplete")
             return message["content"]

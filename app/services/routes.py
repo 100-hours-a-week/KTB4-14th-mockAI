@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from app.clients.kakao_routes import summarize_route
-from app.core.exceptions import GenerationFailed, InvalidModelOutput
+from app.core.exceptions import GUIDE_WALKING, GenerationFailed, InvalidModelOutput
 from app.core.geo import same_place
 from app.core.logging import record
 from app.schemas.itinerary import CATEGORY_ITEM_TYPE, ItineraryDay, ItineraryItem, ItineraryResponse, Place
@@ -76,7 +76,7 @@ async def build_itinerary(
             walked = sum(r.distance_meter for r in [*incoming, to_hotel] if r) / 1000
             if walked > WALK_LIMIT_KM:
                 record("walking_limit_exceeded", day_number=plan.day_number, km=round(walked, 1))
-                raise GenerationFailed("하루 도보 이동이 너무 깁니다.", reason="walking_limit")
+                raise GenerationFailed("하루 도보 이동이 너무 깁니다.", reason="walking_limit", guide=GUIDE_WALKING)
         items = [
             to_item(timed.place, sequence, timed.start.strftime("%H:%M"), timed.end.strftime("%H:%M"), timed.meal_type, r)
             for sequence, (timed, r) in enumerate(zip(schedule.visits, incoming), 1)

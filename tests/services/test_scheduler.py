@@ -2,10 +2,13 @@ from datetime import datetime, time
 
 import pytest
 
-from app.core.exceptions import InvalidModelOutput
+from app.core.exceptions import (
+    GUIDE_PACE, GUIDE_TOO_MANY_PLACES, GUIDE_TRIP_TOO_SHORT, GenerationFailed, InvalidModelOutput,
+)
 from app.schemas.planner import CustomRequest, DayOverride, ModelSelection
 from app.services.scheduler import (
-    TimeShortage, Visit, build_day_plans, check_walking, schedule_day, validate_selection,
+    TimeShortage, Visit, WalkingLimitExceeded, build_day_plans, check_walking, schedule_day, validate_selection,
+    validate_generation_window,
 )
 from tests.conftest import place, request_model
 
@@ -245,3 +248,76 @@ def test_requested_places_must_be_included_in_any_order():
     missing = [("r0", "BREAKFAST"), ("t0", None), ("r1", "LUNCH"), ("t2", None), ("r2", "DINNER")]
     with pytest.raises(InvalidModelOutput, match="장소 t1"):
         validate_selection(day_trip_plans(), selection(*missing), pool, required)
+
+
+# 하루짜리 여행(11:00~17:00): BALANCED는 관광 2 + 점심 1 = 3곳, PACKED는 관광 3 + 점심 1 = 4곳까지 들어갑니다.
+ONE_DAY = {"arrival_datetime": "2026-09-19T10:00:00", "departure_datetime": "2026-09-19T18:00:00"}
+
+
+def listed(count):
+    return [place(f"r{i}", "관광", is_required=True, required_order=i) for i in range(1, count + 1)]
+
+
+def window_failure(required, custom=None, **overrides):
+    request = request_model(**overrides)
+    custom = custom or CustomRequest.empty()
+    with pytest.raises(GenerationFailed) as failed:
+        validate_generation_window(request, custom, build_day_plans(request, custom), required)
+    return failed.value
+
+
+def test_trip_with_four_hours_or_less_to_spend_fails():
+    # 11:00(도착 + 1시간) ~ 15:00(출발 − 1시간) = 정확히 4시간
+    failed = window_failure([], arrival_datetime="2026-09-19T10:00:00", departure_datetime="2026-09-19T16:00:00")
+
+    assert failed.reason == "insufficient_trip_time"
+    assert failed.guide == GUIDE_TRIP_TOO_SHORT
+
+
+def test_trip_with_more_than_four_hours_passes_the_time_check():
+    request = request_model(arrival_datetime="2026-09-19T10:00:00", departure_datetime="2026-09-19T16:01:00")
+
+    validate_generation_window(request, CustomRequest.empty(), build_day_plans(request, CustomRequest.empty()), [])
+
+
+def test_places_that_fit_when_packed_guide_to_change_the_pace():
+    failed = window_failure(listed(4), **ONE_DAY)
+
+    assert failed.reason == "too_many_required_places"
+    assert failed.guide == GUIDE_PACE
+
+
+def test_places_that_do_not_fit_even_when_packed_guide_to_reduce_places():
+    failed = window_failure(listed(5), **ONE_DAY)
+
+    assert failed.guide == GUIDE_TOO_MANY_PLACES
+
+
+def test_places_that_fit_without_the_extra_request_guide_to_relax_it():
+    requested = place("asked", "관광", is_required=True)
+    extra = "부산 바다가 보이는 카페와 해운대 블루라인파크 꼭 가고 싶어요"
+
+    failed = window_failure(listed(3) + [requested], preference={"extra_request": extra}, **ONE_DAY)
+
+    assert failed.guide == "추가 요청사항('부산 바다가 보이는 카페와 해운대 블…')에 따른 일정 소화가 불가능합니다. 요청사항을 완화해 주세요."
+
+
+def test_short_extra_request_is_quoted_whole():
+    requested = place("asked", "관광", is_required=True)
+
+    failed = window_failure(listed(3) + [requested], preference={"extra_request": "해운대 가고 싶어요"}, **ONE_DAY)
+
+    assert "('해운대 가고 싶어요')" in failed.guide
+
+
+def test_extra_request_guide_is_skipped_when_it_is_not_the_cause():
+    failed = window_failure(listed(5), preference={"extra_request": "해운대 가고 싶어요"}, **ONE_DAY)
+
+    assert failed.guide == GUIDE_TOO_MANY_PLACES
+
+
+def test_walking_limit_has_its_own_error_type():
+    walk_day = plans_for(preference={"transport_type": "WALK"})[1]
+
+    with pytest.raises(WalkingLimitExceeded):
+        check_walking(walk_day, 51)

@@ -10,13 +10,30 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.logging import failure, record
 
 
+# 422 응답 data.reason에 담는 안내 문구. 실패 이유와 사용자가 바꿔 볼 입력을 알려줍니다.
+# reason 코드(walking_limit 등)는 로그에만 쓰고, 응답에는 이 문구만 내보냅니다.
+GUIDE_NO_PLACES = "선택한 지역과 테마로 추천할 장소를 찾지 못했습니다. 테마를 줄이거나 다른 테마를 선택해 보세요."
+GUIDE_NO_RESTAURANTS = "일정 주변에서 식사할 식당을 찾지 못했습니다. 선호 음식을 다르게 선택하거나 이동 범위를 넓혀 보세요."
+GUIDE_WALKING = "도보 여행에서 적절한 일정을 제작할 수 없습니다. 대중교통이나 자동차 이동을 선택해 보세요."
+GUIDE_NO_ACCOMMODATION = "일정 동선 근처에서 적절한 숙소를 찾지 못했습니다. 필수 방문지를 줄이거나 숙소를 직접 지정해주세요."
+GUIDE_REQUEST_REFUSED = "입력한 요청사항으로는 일정을 만들 수 없습니다. 추가 요청사항을 수정해 주세요."
+GUIDE_TOO_MANY_PLACES = ("여행 기간에 비해 방문할 장소가 너무 많아 일정을 모두 소화할 수 없습니다. "
+                         "필수 방문지를 줄이거나 여행 기간을 늘려 보세요.")
+GUIDE_PACE = "선택한 일정 강도로는 필수 방문지를 모두 넣을 수 없습니다. 일정 강도를 조정해주세요."
+GUIDE_EXTRA_REQUEST = "추가 요청사항('{summary}')에 따른 일정 소화가 불가능합니다. 요청사항을 완화해 주세요."
+GUIDE_TRIP_TOO_SHORT = "여행 시간이 너무 짧아 일정을 만들 수 없습니다. 도착·출발 시각을 확인해 주세요."
+
+
 class ApiError(Exception):
-    def __init__(self, status_code: int, code: str, message: str, *, reason: str | None = None) -> None:
+    def __init__(
+        self, status_code: int, code: str, message: str, *, reason: str | None = None, guide: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.reason = reason
+        self.guide = guide
 
 
 class ServiceUnavailable(ApiError):
@@ -30,8 +47,10 @@ class RoutingUnavailable(ApiError):
 
 
 class GenerationFailed(ApiError):
-    def __init__(self, message: str = "일정을 생성하지 못했습니다.", *, reason: str | None = None) -> None:
-        super().__init__(422, "ai_itinerary_generation_failed", message, reason=reason)
+    def __init__(
+        self, message: str = "일정을 생성하지 못했습니다.", *, reason: str | None = None, guide: str | None = None,
+    ) -> None:
+        super().__init__(422, "ai_itinerary_generation_failed", message, reason=reason, guide=guide)
 
 
 class InvalidModelOutput(ValueError):
@@ -106,8 +125,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         data = None
         if exc.status_code in (400, 422, 503):
             data = {"error_message": exc.message}
-            if exc.status_code == 422 and hasattr(request.state, "travel_plan_id"):
-                data = {"travel_plan_id": request.state.travel_plan_id, **data}
+            if exc.status_code == 422:
+                if hasattr(request.state, "travel_plan_id"):
+                    data = {"travel_plan_id": request.state.travel_plan_id, **data}
+                data["reason"] = exc.guide
         return JSONResponse(status_code=exc.status_code, content={"message": exc.code, "data": data})
 
     @app.exception_handler(RequestValidationError)

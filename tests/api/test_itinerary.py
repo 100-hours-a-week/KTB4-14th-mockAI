@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.clients.mock import MockPlaces, MockRoutes, MockSearch
 from app.core.config import Settings
+from app.core.exceptions import GUIDE_TRIP_TOO_SHORT
 from app.main import create_app
 from app.services.mock_generator import MockPlanner
 from app.services.pipeline import Providers
@@ -63,7 +64,18 @@ def test_too_short_trip_is_422_with_the_travel_plan_id():
 
     assert response.status_code == 422
     assert response.json() == {"message": "ai_itinerary_generation_failed",
-                               "data": {"travel_plan_id": 10, "error_message": "여행 시간이 너무 짧습니다."}}
+                               "data": {"travel_plan_id": 10, "error_message": "여행 시간이 너무 짧습니다.",
+                                        "reason": GUIDE_TRIP_TOO_SHORT}}
+
+
+def test_422_without_a_guide_has_a_null_reason():
+    required = {"provider": "KAKAO", "provider_place_id": "1", "place_type": "TOURISM", "order": 1}
+    with live_client() as client:
+        response = client.post(GENERATE_PATH, json=body(required_places=[required]), headers=AUTH)
+
+    assert response.status_code == 422
+    assert response.json()["data"] == {"travel_plan_id": 10, "error_message": "필수 장소의 이름·좌표가 없습니다.",
+                                       "reason": None}
 
 
 def test_openapi_lists_exactly_the_three_generation_routes():

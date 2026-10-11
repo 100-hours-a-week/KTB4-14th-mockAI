@@ -6,7 +6,9 @@ import json
 from pydantic import ValidationError
 
 from app.clients.openai_client import OpenAIClient
-from app.core.exceptions import GenerationFailed, InvalidModelOutput
+from app.core.exceptions import (
+    GUIDE_NO_RESTAURANTS, GUIDE_TOO_MANY_PLACES, GUIDE_WALKING, GenerationFailed, InvalidModelOutput,
+)
 from app.core.geo import travel_minutes
 from app.core.logging import record, timed
 from app.prompts.itinerary import (
@@ -15,7 +17,7 @@ from app.prompts.itinerary import (
 from app.schemas.itinerary import Place, TravelGenerationRequest
 from app.schemas.planner import CustomRequest, ModelSelection, PriceExtraction, RestaurantInfoExtraction
 from app.services.places import is_market
-from app.services.scheduler import STAY_MINUTES, DayPlan, Visit, validate_selection
+from app.services.scheduler import STAY_MINUTES, DayPlan, TimeShortage, Visit, WalkingLimitExceeded, validate_selection
 from app.services.selection import complete_selection, repair_closed_meals
 
 
@@ -165,9 +167,9 @@ async def recommend_places(
     candidates: list[Place], required: list[Place],
 ) -> tuple[str, list[list[Visit]]]:
     if any(p.meals for p in plans) and not any(c.category == "식당" for c in candidates):
-        raise GenerationFailed("식당 후보가 없습니다.", reason="no_restaurant_candidates")
+        raise GenerationFailed("식당 후보가 없습니다.", reason="no_restaurant_candidates", guide=GUIDE_NO_RESTAURANTS)
     context = build_selection_context(request, custom, plans, candidates, required)
-    feedback = None
+    feedback, last_error = None, None
     for attempt in range(2):
         try:
             with timed("place_selection_llm", attempt=attempt + 1, candidates=len(candidates)):
@@ -176,6 +178,15 @@ async def recommend_places(
             selection = repair_closed_meals(plans, selection, candidates)
             return selection.title, validate_selection(plans, selection, candidates, required)
         except InvalidModelOutput as exc:
-            feedback = str(exc)
+            feedback, last_error = str(exc), exc
             record("place_selection_retry", attempt=attempt + 1, reason=feedback)
-    raise GenerationFailed("장소를 추천하지 못했습니다.", reason="place_selection_failed")
+    raise GenerationFailed("장소를 추천하지 못했습니다.", reason="place_selection_failed", guide=selection_guide(last_error))
+
+
+def selection_guide(error: InvalidModelOutput | None) -> str | None:
+    """마지막 재시도의 실패 원인으로 안내 문구를 고릅니다. 도보 상한은 도보인 날에만 검사합니다."""
+    if isinstance(error, TimeShortage):
+        return GUIDE_TOO_MANY_PLACES
+    if isinstance(error, WalkingLimitExceeded):
+        return GUIDE_WALKING
+    return None

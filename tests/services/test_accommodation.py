@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.core.exceptions import GenerationFailed
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION, GUIDE_WALKING, GenerationFailed
 from app.schemas.planner import CustomRequest, DayOverride
 from app.services.accommodation import assign_accommodations
 from app.services.scheduler import Visit, build_day_plans
@@ -94,3 +94,11 @@ def test_unfit_hotels_fail_after_the_widened_retry(caplog):
     assert search.calls == [5000, 7500]
     assert "accommodation_unavailable" in caplog.text
     assert "shortage_minutes" in caplog.text
+
+
+@pytest.mark.parametrize("transport, guide", [("WALK", GUIDE_WALKING), ("PUBLIC_TRANSPORT", GUIDE_NO_ACCOMMODATION)])
+def test_missing_hotel_guide_depends_on_walking(transport, guide):
+    with pytest.raises(GenerationFailed) as failed:
+        assign(plans(transport), visits_at(35.160, 35.165, 35.170), HotelSearch(min_radius=10 ** 6))
+
+    assert failed.value.guide == guide

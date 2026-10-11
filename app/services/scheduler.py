@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 import math
 
-from app.core.exceptions import GenerationFailed, InvalidModelOutput
+from app.core.exceptions import (
+    GUIDE_EXTRA_REQUEST, GUIDE_PACE, GUIDE_TOO_MANY_PLACES, GUIDE_TRIP_TOO_SHORT, GenerationFailed, InvalidModelOutput,
+)
 from app.schemas.itinerary import WEEKDAYS, Place, TravelGenerationRequest
 from app.schemas.planner import CustomRequest, ModelSelection
 from app.core.geo import TRAVEL_SPEEDS, path_km, travel_minutes
@@ -48,6 +50,8 @@ MEAL_OVERLAP_MINUTES = 60
 MEAL_EARLY_TOLERANCE_MINUTES = 30     # 목표 시각보다 이만큼 이르면 기다렸다가 식사
 # 1단계에서 숙소 위치를 모를 때 비워 둘 숙소 이동 기준 거리(km)
 HOTEL_TRANSFER_KM = {"WALK": 1, "PUBLIC_TRANSPORT": 3, "CAR": 5}
+EXTRA_REQUEST_SUMMARY_LENGTH = 20     # 실패 안내 문구에 넣을 추가 요청사항 길이
+MIN_TRIP_MINUTES = 240                # 날짜별 활동 가능 시간 합이 이 이하면 일정을 만들지 않습니다
 
 
 @dataclass
@@ -127,6 +131,10 @@ class TimeShortage(InvalidModelOutput):
         self.minutes = minutes
 
 
+class WalkingLimitExceeded(InvalidModelOutput):
+    """도보인 날 하루 도보 이동이 상한을 넘었습니다."""
+
+
 def minutes_between(start: datetime, end: datetime) -> int:
     return max(0, int((end - start).total_seconds() // 60))
 
@@ -196,12 +204,44 @@ def build_day_plans(request: TravelGenerationRequest, custom: CustomRequest) -> 
     return plans
 
 
-def validate_generation_window(plans: list[DayPlan], required: list[Place]) -> None:
+def fits_window(plans: list[DayPlan], required: list[Place]) -> bool:
     capacity = sum(p.tour_max + len(p.meals) for p in plans)
-    if capacity == 0:
-        raise GenerationFailed("여행 시간이 너무 짧습니다.", reason="insufficient_trip_time")
-    if len([p for p in required if p.category != "숙소"]) > capacity:
-        raise GenerationFailed("필수 장소가 너무 많습니다.", reason="too_many_required_places")
+    return capacity > 0 and len([p for p in required if p.category != "숙소"]) <= capacity
+
+
+def summarize_extra_request(text: str) -> str:
+    text = text.strip()
+    if len(text) <= EXTRA_REQUEST_SUMMARY_LENGTH:
+        return text
+    return text[:EXTRA_REQUEST_SUMMARY_LENGTH] + "…"
+
+
+def window_guide(request: TravelGenerationRequest, custom: CustomRequest, required: list[Place]) -> str:
+    """LLM을 다시 부르지 않고 조건을 바꿔 일정을 다시 계산해, 무엇을 바꾸면 되는지 고릅니다."""
+    extra = request.preference.extra_request
+    if extra:
+        # 추가 요청사항(시간·강도·이동수단 변경과 요청문의 장소)을 빼면 들어가는지 봅니다.
+        listed = [p for p in required if p.required_order is not None]
+        if fits_window(build_day_plans(request, CustomRequest.empty()), listed):
+            return GUIDE_EXTRA_REQUEST.format(summary=summarize_extra_request(extra))
+    packed = request.model_copy(update={"preference": request.preference.model_copy(update={"pace_type": "PACKED"})})
+    packed_custom = custom.model_copy(update={"day_overrides": [
+        o.model_copy(update={"pace_type": None}) for o in custom.day_overrides
+    ]})
+    if fits_window(build_day_plans(packed, packed_custom), required):
+        return GUIDE_PACE
+    return GUIDE_TOO_MANY_PLACES
+
+
+def validate_generation_window(
+    request: TravelGenerationRequest, custom: CustomRequest, plans: list[DayPlan], required: list[Place],
+) -> None:
+    # 활동 가능 시간(도착 + 1시간 ~ 출발 − 1시간, 00:00~07:00 제외)은 추가 요청사항과 상관없습니다.
+    if sum(minutes_between(p.hard_start, p.hard_end) for p in plans) <= MIN_TRIP_MINUTES:
+        raise GenerationFailed("여행 시간이 너무 짧습니다.", reason="insufficient_trip_time", guide=GUIDE_TRIP_TOO_SHORT)
+    if not fits_window(plans, required):
+        raise GenerationFailed("필수 장소가 너무 많습니다.", reason="too_many_required_places",
+                               guide=window_guide(request, custom, required))
 
 
 def schedule_day(plan: DayPlan, visits: list[Visit], transfers: list[int], tail: int) -> DaySchedule:
@@ -283,7 +323,7 @@ def walking_km(plan: DayPlan, visits: list[Visit], previous_hotel, hotel) -> flo
 
 def check_walking(plan: DayPlan, km: float) -> None:
     if plan.transport == "WALK" and km > WALK_LIMIT_KM:
-        raise InvalidModelOutput(f"{plan.date.isoformat()}: 도보 이동이 {km:.1f}km로 하루 상한 {WALK_LIMIT_KM}km를 넘습니다")
+        raise WalkingLimitExceeded(f"{plan.date.isoformat()}: 도보 이동이 {km:.1f}km로 하루 상한 {WALK_LIMIT_KM}km를 넘습니다")
 
 
 def validate_selection(

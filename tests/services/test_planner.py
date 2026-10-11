@@ -1,9 +1,13 @@
 import asyncio
 import json
 
+import pytest
+
+from app.core.exceptions import GUIDE_TOO_MANY_PLACES, GUIDE_WALKING, GenerationFailed, InvalidModelOutput
 from app.schemas.planner import CustomRequest, ModelSelection, PriceExtraction
-from app.services.planner import OpenAIPlanner, interpret_custom_request
-from tests.conftest import request_model
+from app.services.planner import OpenAIPlanner, interpret_custom_request, recommend_places
+from app.services.scheduler import TimeShortage, WalkingLimitExceeded, build_day_plans
+from tests.conftest import place, request_model
 
 
 def objects(schema):
@@ -82,3 +86,28 @@ def test_custom_request_is_retried_once_so_requested_places_are_not_lost():
 
     assert planner.calls == 2
     assert custom.places == ["해운대"]
+
+
+class FailingSelector:
+    def __init__(self, error):
+        self.error = error
+
+    async def select_places(self, context, feedback):
+        raise self.error
+
+
+@pytest.mark.parametrize("error, guide", [
+    (TimeShortage(build_day_plans(request_model(), CustomRequest.empty())[0], 30), GUIDE_TOO_MANY_PLACES),
+    (WalkingLimitExceeded("도보 상한"), GUIDE_WALKING),
+    (InvalidModelOutput("형식 오류"), None),
+])
+def test_final_selection_failure_guide_follows_the_last_error(error, guide):
+    request = request_model()
+    plans = build_day_plans(request, CustomRequest.empty())
+    candidates = [place("t1", "관광"), place("f1", "식당")]
+
+    with pytest.raises(GenerationFailed) as failed:
+        asyncio.run(recommend_places(FailingSelector(error), request, CustomRequest.empty(), plans, candidates, []))
+
+    assert failed.value.reason == "place_selection_failed"
+    assert failed.value.guide == guide

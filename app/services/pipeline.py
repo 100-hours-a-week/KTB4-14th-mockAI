@@ -38,7 +38,7 @@ async def generation_stages(request: TravelGenerationRequest, providers: Provide
     with timed("requested_places"):
         required += await requested_places(providers.places, request.region_name, custom.places, required)
     plans = build_day_plans(request, custom)
-    validate_generation_window(plans, required)
+    validate_generation_window(request, custom, plans, required)
     search = PlaceSearch(
         region_name=request.region_name,
         transport=min((p.transport for p in plans), key=TRANSPORT_RANK.get),
