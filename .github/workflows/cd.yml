@@ -1,0 +1,138 @@
+name: AI Image CD
+
+# AI 레포의 CD는 "운영 이미지 생성·검증·ECR 저장"까지만 담당한다.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  # 이미지 생성은 한 번에 하나만 실행하며 진행 중인 실행을 취소하지 않음
+  group: ai-image-release
+  cancel-in-progress: false
+
+permissions:
+  # Checkout에 필요한 읽기 권한
+  contents: read
+  # GitHub OIDC Token을 발급받아 AWS IAM Role을 Assume하기 위한 권한
+  id-token: write
+  # Trivy 스캔 결과(SARIF)를 GitHub Security 탭에 업로드하기 위한 권한
+  security-events: write
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: GitHub OIDC로 AWS 인증
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: ai-image-cd-${{ github.run_id }}
+
+      - name: ECR 로그인
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 버전·이미지 주소 결정 (pyproject.toml 버전 = 태그)
+        # ECR 태그 불변(IMMUTABLE) 전제: 버전 = 태그 / Commit SHA는 이미지 라벨·Release 정보에 기록
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          {
+            echo "VERSION=${VERSION}"
+            echo "REPOSITORY_URI=${REGISTRY}/${ECR_REPOSITORY}"
+            echo "IMAGE=${REGISTRY}/${ECR_REPOSITORY}:${VERSION}"
+          } >> "$GITHUB_ENV"
+
+      - name: 이미지 태그 중복 확인 (이미 존재하면 실패)
+        # 버전을 올리지 않은 머지는 빌드·스캔 전에 바로 실패시켜 러너 시간을 아낌
+        run: |
+          OUTPUT=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$VERSION" 2>&1) \
+            && { echo "::error::ECR에 '${VERSION}' 태그가 이미 존재합니다. pyproject.toml의 version을 올린 뒤 다시 머지하세요."; exit 1; }
+          # 태그가 없는 경우(ImageNotFoundException)만 통과, 권한·네트워크 등 다른 오류는 실패 처리
+          grep -q "ImageNotFoundException" <<< "$OUTPUT" || { echo "::error::태그 조회 중 오류가 발생했습니다: ${OUTPUT}"; exit 1; }
+
+      - name: Docker Buildx 준비
+        uses: docker/setup-buildx-action@v4
+
+      - name: ARM64 이미지 빌드
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}
+          # 버전으로 태그를 설정하고, SHA는 라벨에 기록만 한다.
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy 취약점 스캔 (HIGH·CRITICAL 발견 시 실패)
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          # SARIF 포맷은 기본적으로 severity 필터를 무시하므로 리포트·실패 판정 모두 HIGH·CRITICAL로 제한
+          limit-severities-for-sarif: true
+          # 취약점 발견 시 Job 실패 → 이후 Push 단계는 자동으로 skip되어 ECR에 저장되지 않음
+          exit-code: '1'
+
+      - name: Trivy 결과 업로드 (GitHub Security 탭)
+        # 스캔이 실패(취약점 발견)해도 리포트는 게시
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      - name: ECR Push 및 Image Digest 확인
+        id: push
+        run: |
+          # 스캔을 통과한 바로 그 로컬 이미지를 Push (재빌드 X)
+          docker push "$IMAGE"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$VERSION" \
+            --query 'imageDetails[0].imageDigest' --output text)
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Release 정보 게시 (Cloud 레포 Release PR 작성용)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## AI 운영 이미지 생성 완료
+
+          | 항목 | 값 |
+          |---|---|
+          | AI Version | \`${VERSION}\` |
+          | Commit SHA | \`${GITHUB_SHA}\` |
+          | Image Digest | \`${DIGEST}\` |
+          | Image URI | \`${REPOSITORY_URI}@${DIGEST}\` |
+
+          ### Cloud 레포 \`releases/ai.yml\`에 아래 내용을 반영해 Release PR을 생성하세요
+          브랜치: \`chore/release-ai-${VERSION}\`
+
+          \`\`\`yaml
+          service: ai-worker
+          version: ${VERSION}
+          commit_sha: ${GITHUB_SHA}
+          image_digest: ${DIGEST}
+          \`\`\`
+          EOF
