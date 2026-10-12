@@ -1,0 +1,59 @@
+name: AI PR CI
+
+on:
+  pull_request:
+    branches: [develop]
+
+# 같은 PR에 연속 push 시 이전 CI 취소
+concurrency:
+  group: ai-ci-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    # ARM64 이미지를 직접 빌드하므로 QEMU 에뮬레이션이 불필요
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # checkout 이후 Git 명령용 인증 정보를 유지하지 않음
+
+      - name: uv / Python 세팅
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12" # Dockerfile 베이스 이미지와 동일
+          enable-cache: true # uv가 다운로드한 패키지 캐싱 (uv.lock 내용이 캐시 키)
+
+      # .venv는 생성 시점의 Python 인터프리터 경로를 참조하므로, 러너의 Python 버전이 바뀌면 복원한 venv가 동작하지 않을 수 있어 캐싱하지 않는다.
+      - name: 의존성 설치
+        run: uv sync --frozen --extra dev
+
+      - name: 테스트 실행
+        run: uv run --frozen pytest --junitxml=test-report.xml -rA --tb=short
+
+      # 테스트가 실패해도 결과와 실패 로그를 실행 요약(Job Summary)에 게시
+      - name: 테스트 결과 요약 게시
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: test-report.xml
+          show: all
+
+      # 이후 단계는 테스트가 통과해야만 실행 (앞 단계 실패 시 자동 skip)
+      - name: 도커 빌드 환경 세팅
+        uses: docker/setup-buildx-action@v4
+
+      - name: 도커 이미지 빌드 테스트 실행
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false # 빌드 '테스트'만 진행
+          tags: audigo-ai:ci-test
+          # 러너(GitHub Actions) 캐시에 레이어를 저장/재사용해 PR마다 반복 빌드 시간을 단축
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
