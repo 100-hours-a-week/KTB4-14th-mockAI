@@ -15,8 +15,6 @@ permissions:
   contents: read
   # GitHub OIDC Token을 발급받아 AWS IAM Role을 Assume하기 위한 권한
   id-token: write
-  # Trivy 스캔 결과(SARIF)를 GitHub Security 탭에 업로드하기 위한 권한
-  security-events: write
 
 jobs:
   build-scan-push:
@@ -85,21 +83,13 @@ jobs:
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: ${{ env.IMAGE }}
-          format: sarif
-          output: trivy-results.sarif
+          # 발견된 취약점을 실행 로그에 표로 출력
+          format: table
           severity: CRITICAL,HIGH
-          # SARIF 포맷은 기본적으로 severity 필터를 무시하므로 리포트·실패 판정 모두 HIGH·CRITICAL로 제한
-          limit-severities-for-sarif: true
+          # 수정 버전이 아직 없는 취약점(주로 base 이미지 OS 패키지)은 제외 → 손쓸 수 없는 이유로 배포가 막히지 않도록
+          ignore-unfixed: true
           # 취약점 발견 시 Job 실패 → 이후 Push 단계는 자동으로 skip되어 ECR에 저장되지 않음
           exit-code: '1'
-
-      - name: Trivy 결과 업로드 (GitHub Security 탭)
-        # 스캔이 실패(취약점 발견)해도 리포트는 게시
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image
 
       - name: ECR Push 및 Image Digest 확인
         id: push
@@ -118,13 +108,7 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## AI 운영 이미지 생성 완료
-
-          | 항목 | 값 |
-          |---|---|
-          | AI Version | \`${VERSION}\` |
-          | Commit SHA | \`${GITHUB_SHA}\` |
-          | Image Digest | \`${DIGEST}\` |
-          | Image URI | \`${REPOSITORY_URI}@${DIGEST}\` |
+          Image URI : \`${REPOSITORY_URI}@${DIGEST}\`
 
           ### Cloud 레포 \`releases/ai.yml\`에 아래 내용을 반영해 Release PR을 생성하세요
           브랜치: \`chore/release-ai-${VERSION}\`
