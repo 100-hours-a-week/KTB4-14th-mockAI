@@ -42,7 +42,8 @@ jobs:
         uses: test-summary/action@v2
         with:
           paths: test-report.xml
-          show: all
+          # 성공·실패·건너뜀은 개수로만 표시하고, 표에는 실패한 테스트만 출력
+          show: fail
 
       # 이후 단계는 테스트가 통과해야만 실행 (앞 단계 실패 시 자동 skip)
       - name: 도커 빌드 환경 세팅
