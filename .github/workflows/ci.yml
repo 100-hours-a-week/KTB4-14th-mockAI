@@ -86,13 +86,4 @@ jobs:
             echo "|---|---|"
             echo "| PR | #${PR_NUMBER} (\`${GITHUB_HEAD_REF}\` → \`${GITHUB_BASE_REF}\`) |"
             echo "| Commit SHA | \`${HEAD_SHA}\` |"
-            echo
-            echo "### 단계별 결과"
-            echo
-            echo "| 단계 | 결과 |"
-            echo "|---|---|"
-            echo "| 테스트 (pytest) | $(icon "$TEST") |"
-            echo "| ARM64 이미지 빌드 테스트 | $(icon "$BUILD") |"
-            echo
-            echo "테스트 상세 결과는 위 테스트 요약을 확인하세요."
           } >> "$GITHUB_STEP_SUMMARY"
