@@ -40,7 +40,7 @@ def create_app(*, settings: Settings | None = None, providers: Providers | None 
             yield
 
     # 기본 문서 경로는 끄고, 아래에서 Basic 인증을 붙여 다시 등록합니다.
-    app = FastAPI(title="Audigo Itinerary AI API", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="Audigo Itinerary AI API", version="0.1.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
 
