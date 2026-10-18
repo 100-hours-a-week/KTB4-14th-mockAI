@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
 
-from app.api.routes import health, itinerary, mock
+from app.api.routes import health, itinerary, matching, mock
 from app.clients.kakao_places import KakaoPlaces
 from app.clients.kakao_routes import KakaoRoutes
 from app.clients.kakao_search import KakaoSearch
@@ -61,6 +61,7 @@ def create_app(*, settings: Settings | None = None, providers: Providers | None 
     app.include_router(health.router)
     app.include_router(itinerary.router, dependencies=auth)
     app.include_router(mock.router, dependencies=auth)
+    app.include_router(matching.router, dependencies=auth)
     if settings.docs_username and settings.docs_password:
         register_docs(app, settings)
     return app

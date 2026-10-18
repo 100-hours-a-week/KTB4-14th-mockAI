@@ -29,6 +29,15 @@ class Settings:
     # /mock 경로 전용
     mock_stage_delay_seconds: float = 1.0
     mock_scenario: str = "success"
+    # 초기 구현용 후보 상한. BE 연동 시 합의한 값으로 변경합니다.
+    matching_max_candidates: int = 1000
+    matching_max_body_bytes: int = 2 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if type(self.matching_max_candidates) is not int or self.matching_max_candidates < 1:
+            raise RuntimeError("MATCHING_MAX_CANDIDATES must be a positive integer")
+        if type(self.matching_max_body_bytes) is not int or self.matching_max_body_bytes < 1:
+            raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer")
 
     @classmethod
     def from_env(cls, env_file: Path = ENV_FILE) -> "Settings":
@@ -43,6 +52,14 @@ class Settings:
             raise RuntimeError("DOCS_PASSWORD must be at least 8 characters")
         if scenario not in MOCK_SCENARIOS:
             raise RuntimeError(f"MOCK_SCENARIO must be one of {', '.join(MOCK_SCENARIOS)}")
+        try:
+            matching_max_candidates = int(values.get("MATCHING_MAX_CANDIDATES") or "1000")
+        except ValueError as exc:
+            raise RuntimeError("MATCHING_MAX_CANDIDATES must be a positive integer") from exc
+        try:
+            matching_max_body_bytes = int(values.get("MATCHING_MAX_BODY_BYTES") or str(2 * 1024 * 1024))
+        except ValueError as exc:
+            raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer") from exc
         return cls(
             api_token=token,
             openai_api_key=values.get("OPENAI_API_KEY") or values.get("OPEN_API_KEY"),
@@ -52,4 +69,6 @@ class Settings:
             openai_model=values.get("OPENAI_MODEL") or "gpt-4o-mini",
             mock_stage_delay_seconds=float(values.get("MOCK_STAGE_DELAY_SECONDS") or 1.0),
             mock_scenario=scenario,
+            matching_max_candidates=matching_max_candidates,
+            matching_max_body_bytes=matching_max_body_bytes,
         )
