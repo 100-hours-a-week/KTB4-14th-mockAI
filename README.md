@@ -41,6 +41,19 @@ PLACE_RECOMMEND_STARTED → PLACE_RECOMMEND_DONE
 | `unavailable` | 503 `ai_service_unavailable` |
 | `drop` | 결과 없이 스트림 종료 |
 
+## SQS 큐 워커
+
+API와 별개로, 서버 프로세스 안의 백그라운드 워커가 SQS로 여행 생성 요청을 처리합니다. `AUDIGO_AI_JOB_QUEUE_URL`과 `AUDIGO_AI_RESULT_QUEUE_URL`이 모두 있을 때만 켜집니다. 자세한 설계는 [docs/design/sqs-queue-worker.md](docs/design/sqs-queue-worker.md)에 있습니다.
+
+```text
+Backend → AI Job Queue → 워커(일정 생성) → AI Result Queue → Backend
+```
+
+- Job 메시지를 한 번에 1개씩 받아 순서대로 처리합니다. 생성 제한 시간(5분)은 API와 같습니다.
+- 단계마다 `PROGRESS`를 보내고, 끝나면 `COMPLETED`(`payload`에 최종 일정) 또는 `FAILED`(`error_message`)를 보냅니다.
+- 최종 결과를 보낸 뒤에 Job 메시지를 삭제합니다. 보내지 못하면 3번까지 다시 시도하고, 그래도 실패하면 메시지를 남겨 둡니다.
+- 같은 `generation_job_id`가 다시 들어오면 AI를 호출하지 않고 삭제합니다. 처리 기록은 프로세스 메모리(최근 1,000건)에 있어서 재시작하면 사라집니다.
+
 ## 일정 생성 로직
 
 자세한 설계는 [docs/design/itinerary-generation.md](docs/design/itinerary-generation.md)에 있습니다.
@@ -128,6 +141,9 @@ docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 | `DOCS_PASSWORD` | 위 비밀번호 (8자 이상). 아이디·비밀번호 중 하나라도 없으면 문서 페이지를 열지 않습니다 |
 | `MOCK_STAGE_DELAY_SECONDS` | 목업 단계 이벤트 사이 대기 시간(초), 기본 1 |
 | `MOCK_SCENARIO` | 목업 기본 시나리오, 기본 `success`. 허용 값 밖이면 서버가 시작되지 않습니다. |
+| `AWS_REGION` | SQS 큐 리전, 기본 `ap-northeast-2` |
+| `AUDIGO_AI_JOB_QUEUE_URL` | 여행 생성 요청을 받는 큐. 결과 큐 URL과 함께 있어야 워커가 켜집니다 |
+| `AUDIGO_AI_RESULT_QUEUE_URL` | 진행 상태·결과를 보내는 큐 |
 | `MATCHING_MAX_CANDIDATES` | 매칭 후보 전달 상한. 양의 정수, 초기 구현 기본 1000. 초과하면 422이며 BE 연동 시 조정 |
 | `MATCHING_MAX_BODY_BYTES` | 매칭 JSON 본문 최대 바이트 수. 양의 정수, 초기 기본 2097152(2MiB), 초과 시 422 |
 
@@ -168,8 +184,8 @@ app/
 │   └── routes/        # health, itinerary(실제), mock(목업)
 ├── schemas/           # 요청·응답·LLM 입출력 Pydantic 모델
 ├── prompts/           # 모델 프롬프트 (커스텀은 여기서)
-├── clients/           # OpenAI, 카카오(장소·길찾기·블로그), 목업용 가짜 카카오
-├── services/          # scheduler, planner, accommodation, routes, pricing, pipeline, mock_generator, streaming/
+├── clients/           # OpenAI, 카카오(장소·길찾기·블로그), SQS, 목업용 가짜 카카오
+├── services/          # scheduler, planner, accommodation, routes, pricing, pipeline, mock_generator, queue_worker, streaming/
 └── docs/              # Swagger 예시
 docs/design/           # 설계 문서
 tests/
