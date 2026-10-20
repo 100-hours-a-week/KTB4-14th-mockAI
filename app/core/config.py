@@ -29,6 +29,16 @@ class Settings:
     # /mock 경로 전용
     mock_stage_delay_seconds: float = 1.0
     mock_scenario: str = "success"
+    # 초기 구현용 후보 상한. BE 연동 시 합의한 값으로 변경합니다.
+    matching_max_candidates: int = 1000
+    matching_max_body_bytes: int = 2 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if type(self.matching_max_candidates) is not int or self.matching_max_candidates < 1:
+            raise RuntimeError("MATCHING_MAX_CANDIDATES must be a positive integer")
+        if type(self.matching_max_body_bytes) is not int or self.matching_max_body_bytes < 1:
+            raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer")
+
     # SQS 큐 워커. 두 큐 URL이 모두 있을 때만 워커를 켭니다.
     aws_region: str = "ap-northeast-2"
     job_queue_url: str | None = None
@@ -64,6 +74,8 @@ class Settings:
             openai_model=values.get("OPENAI_MODEL") or "gpt-4o-mini",
             mock_stage_delay_seconds=float(values.get("MOCK_STAGE_DELAY_SECONDS") or 1.0),
             mock_scenario=scenario,
+            matching_max_candidates=matching_max_candidates,
+            matching_max_body_bytes=matching_max_body_bytes,
             aws_region=values.get("AWS_REGION") or "ap-northeast-2",
             job_queue_url=values.get("AUDIGO_AI_JOB_QUEUE_URL") or None,
             result_queue_url=values.get("AUDIGO_AI_RESULT_QUEUE_URL") or None,
