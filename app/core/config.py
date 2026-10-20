@@ -29,6 +29,10 @@ class Settings:
     # /mock 경로 전용
     mock_stage_delay_seconds: float = 1.0
     mock_scenario: str = "success"
+    # SQS 큐 워커. 두 큐 URL이 모두 있을 때만 워커를 켭니다.
+    aws_region: str = "ap-northeast-2"
+    job_queue_url: str | None = None
+    result_queue_url: str | None = None
 
     @classmethod
     def from_env(cls, env_file: Path = ENV_FILE) -> "Settings":
@@ -52,4 +56,7 @@ class Settings:
             openai_model=values.get("OPENAI_MODEL") or "gpt-4o-mini",
             mock_stage_delay_seconds=float(values.get("MOCK_STAGE_DELAY_SECONDS") or 1.0),
             mock_scenario=scenario,
+            aws_region=values.get("AWS_REGION") or "ap-northeast-2",
+            job_queue_url=values.get("AUDIGO_AI_JOB_QUEUE_URL") or None,
+            result_queue_url=values.get("AUDIGO_AI_RESULT_QUEUE_URL") or None,
         )

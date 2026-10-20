@@ -19,6 +19,7 @@ from app.core.logging import request_id as log_request_id
 from app.core.security import require_api_token, require_docs_credentials
 from app.services.pipeline import Providers
 from app.services.planner import OpenAIPlanner
+from app.services.queue_worker import start_queue_worker, stop_queue_worker
 
 
 def live_providers(client: httpx.AsyncClient, settings: Settings) -> Providers:
@@ -37,10 +38,14 @@ def create_app(*, settings: Settings | None = None, providers: Providers | None 
     async def lifespan(app: FastAPI):
         async with httpx.AsyncClient() as client:
             app.state.providers = providers or live_providers(client, settings)
-            yield
+            app.state.queue_worker = start_queue_worker(settings, app.state.providers)
+            try:
+                yield
+            finally:
+                await stop_queue_worker(app.state.queue_worker)
 
     # 기본 문서 경로는 끄고, 아래에서 Basic 인증을 붙여 다시 등록합니다.
-    app = FastAPI(title="Audigo Itinerary AI API", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="Audigo Itinerary AI API", version="0.2.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
 
