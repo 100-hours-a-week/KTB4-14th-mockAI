@@ -78,10 +78,11 @@ def test_422_without_a_guide_has_a_null_reason():
                                        "reason": None}
 
 
-def test_openapi_lists_exactly_the_three_generation_routes():
+def test_openapi_lists_generation_and_matching_routes():
     with live_client(docs_username="admin", docs_password="docs-password") as client:
         paths = client.get("/openapi.json", auth=("admin", "docs-password")).json()["paths"]
 
     assert {p for p, methods in paths.items() if "post" in methods} == {
         GENERATE_PATH, STREAM_PATH, "/mock" + STREAM_PATH,
+        "/api/ai/v1/matches/candidates",
     }

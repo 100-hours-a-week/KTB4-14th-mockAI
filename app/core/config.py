@@ -57,6 +57,14 @@ class Settings:
             raise RuntimeError("DOCS_PASSWORD must be at least 8 characters")
         if scenario not in MOCK_SCENARIOS:
             raise RuntimeError(f"MOCK_SCENARIO must be one of {', '.join(MOCK_SCENARIOS)}")
+        try:
+            matching_max_candidates = int(values.get("MATCHING_MAX_CANDIDATES") or "1000")
+        except ValueError as exc:
+            raise RuntimeError("MATCHING_MAX_CANDIDATES must be a positive integer") from exc
+        try:
+            matching_max_body_bytes = int(values.get("MATCHING_MAX_BODY_BYTES") or str(2 * 1024 * 1024))
+        except ValueError as exc:
+            raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer") from exc
         return cls(
             api_token=token,
             openai_api_key=values.get("OPENAI_API_KEY") or values.get("OPEN_API_KEY"),
