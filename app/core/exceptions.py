@@ -128,7 +128,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             if exc.status_code == 422:
                 if hasattr(request.state, "travel_plan_id"):
                     data = {"travel_plan_id": request.state.travel_plan_id, **data}
-                data["reason"] = exc.guide
+                # reason 안내 문구는 일정 생성 실패에만 담고, 매칭 등 다른 422는 error_message만 반환합니다.
+                if isinstance(exc, GenerationFailed):
+                    data["reason"] = exc.guide
         return JSONResponse(status_code=exc.status_code, content={"message": exc.code, "data": data})
 
     @app.exception_handler(RequestValidationError)
