@@ -45,7 +45,7 @@ def create_app(*, settings: Settings | None = None, providers: Providers | None 
                 await stop_queue_worker(app.state.queue_worker)
 
     # 기본 문서 경로는 끄고, 아래에서 Basic 인증을 붙여 다시 등록합니다.
-    app = FastAPI(title="Audigo Itinerary AI API", version="0.2.1", lifespan=lifespan,
+    app = FastAPI(title="Audigo Itinerary AI API", version="0.2.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
 
