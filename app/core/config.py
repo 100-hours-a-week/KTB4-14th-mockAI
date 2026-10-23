@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import os
 from pathlib import Path
 
@@ -38,11 +39,22 @@ class Settings:
             raise RuntimeError("MATCHING_MAX_CANDIDATES must be a positive integer")
         if type(self.matching_max_body_bytes) is not int or self.matching_max_body_bytes < 1:
             raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer")
+        if self.queue_worker_mode not in ("live", "mock", "off"):
+            raise RuntimeError("AUDIGO_AI_QUEUE_WORKER_MODE must be live, mock, or off")
+        if type(self.queue_worker_concurrency) is not int or not 1 <= self.queue_worker_concurrency <= 32:
+            raise RuntimeError("AUDIGO_AI_QUEUE_WORKER_CONCURRENCY must be an integer from 1 to 32")
+        if not math.isfinite(self.mock_job_delay_seconds) or self.mock_job_delay_seconds < 0:
+            raise RuntimeError("MOCK_JOB_DELAY_SECONDS must be a finite non-negative number")
+        if self.queue_worker_mode == "mock" and self.mock_job_delay_seconds >= self.generation_timeout_seconds:
+            raise RuntimeError("MOCK_JOB_DELAY_SECONDS must be less than the generation timeout")
 
     # SQS 큐 워커. 두 큐 URL이 모두 있을 때만 워커를 켭니다.
     aws_region: str = "ap-northeast-2"
     job_queue_url: str | None = None
     result_queue_url: str | None = None
+    queue_worker_mode: str = "live"
+    queue_worker_concurrency: int = 1
+    mock_job_delay_seconds: float = 30.0
 
     @classmethod
     def from_env(cls, env_file: Path = ENV_FILE) -> "Settings":
@@ -65,6 +77,14 @@ class Settings:
             matching_max_body_bytes = int(values.get("MATCHING_MAX_BODY_BYTES") or str(2 * 1024 * 1024))
         except ValueError as exc:
             raise RuntimeError("MATCHING_MAX_BODY_BYTES must be a positive integer") from exc
+        try:
+            queue_worker_concurrency = int(values.get("AUDIGO_AI_QUEUE_WORKER_CONCURRENCY") or "1")
+        except ValueError as exc:
+            raise RuntimeError("AUDIGO_AI_QUEUE_WORKER_CONCURRENCY must be an integer from 1 to 32") from exc
+        try:
+            mock_job_delay_seconds = float(values.get("MOCK_JOB_DELAY_SECONDS") or "30")
+        except ValueError as exc:
+            raise RuntimeError("MOCK_JOB_DELAY_SECONDS must be a finite non-negative number") from exc
         return cls(
             api_token=token,
             openai_api_key=values.get("OPENAI_API_KEY") or values.get("OPEN_API_KEY"),
@@ -79,4 +99,7 @@ class Settings:
             aws_region=values.get("AWS_REGION") or "ap-northeast-2",
             job_queue_url=values.get("AUDIGO_AI_JOB_QUEUE_URL") or None,
             result_queue_url=values.get("AUDIGO_AI_RESULT_QUEUE_URL") or None,
+            queue_worker_mode=values.get("AUDIGO_AI_QUEUE_WORKER_MODE") or "live",
+            queue_worker_concurrency=queue_worker_concurrency,
+            mock_job_delay_seconds=mock_job_delay_seconds,
         )

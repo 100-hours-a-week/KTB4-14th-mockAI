@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from app.core.exceptions import GUIDE_NO_ACCOMMODATION
 from app.main import create_app
 from app.services import queue_worker
 from app.services.mock_generator import mock_stages
-from app.services.queue_worker import QueueWorker
+from app.services.queue_worker import QueueWorker, start_queue_worker, stop_queue_worker
 from tests.conftest import TOKEN, body
 
 
@@ -210,3 +211,199 @@ def test_worker_is_not_started_without_queue_urls():
     app = create_app(settings=Settings(api_token=TOKEN, openai_api_key="test", kakao_rest_api_key="test"))
     with TestClient(app):
         assert app.state.queue_worker is None
+
+
+class ReceivingQueue(FakeQueue):
+    def __init__(self, messages=()):
+        super().__init__()
+        self.messages = asyncio.Queue()
+        for message in messages:
+            self.messages.put_nowait(message)
+
+    async def receive(self):
+        return [await self.messages.get()]
+
+
+class CompletingQueue(FakeQueue):
+    def __init__(self, expected=1):
+        super().__init__()
+        self.expected = expected
+        self.completed = asyncio.Event()
+
+    async def send(self, message):
+        await super().send(message)
+        if sum(item["type"] != "PROGRESS" for item in self.sent) >= self.expected:
+            self.completed.set()
+
+
+def test_off_mode_does_not_construct_an_aws_client(monkeypatch):
+    def unexpected_client(_region):
+        pytest.fail("off mode must not access AWS")
+
+    monkeypatch.setattr(queue_worker, "sqs_client", unexpected_client)
+    settings = Settings(queue_worker_mode="off", job_queue_url="jobs", result_queue_url="results")
+    assert start_queue_worker(settings, object()) is None
+
+
+def test_mock_app_processes_queued_job_without_external_ai_keys(monkeypatch):
+    jobs, results = ReceivingQueue([job()]), CompletingQueue()
+    monkeypatch.setattr(queue_worker, "sqs_client", lambda _region: object())
+    monkeypatch.setattr(queue_worker, "SqsQueue", lambda _client, url: jobs if url == "jobs" else results)
+    settings = Settings(api_token=TOKEN, queue_worker_mode="mock", mock_job_delay_seconds=0,
+                        job_queue_url="jobs", result_queue_url="results")
+    with TestClient(create_app(settings=settings)) as client:
+        assert client.get("/health").status_code == 200
+        deadline = time.monotonic() + 2
+        while not results.completed.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert results.completed.is_set()
+        assert results.sent[-1]["type"] == "COMPLETED"
+        assert jobs.deleted == ["r1"]
+
+
+@pytest.mark.parametrize("mode,scenario,expected_type", [
+    ("live", "success", "COMPLETED"),
+    ("mock", "success", "COMPLETED"),
+    ("mock", "fail_stay", "FAILED"),
+    ("mock", "unavailable", "FAILED"),
+    ("mock", "drop", "FAILED"),
+])
+def test_start_worker_selects_generation_mode_without_changing_result_contract(monkeypatch, mode, scenario, expected_type):
+    async def run():
+        jobs, results = ReceivingQueue([job()]), CompletingQueue()
+        live_calls = []
+        providers = object()
+
+        def live_stages(request, actual_providers):
+            assert actual_providers is providers
+            live_calls.append(request.travel_plan_id)
+            return mock_stages(request, "success", 0)
+
+        monkeypatch.setattr(queue_worker, "sqs_client", lambda _region: object())
+        monkeypatch.setattr(queue_worker, "SqsQueue", lambda _client, url: jobs if url == "jobs" else results)
+        monkeypatch.setattr(queue_worker, "generation_stages", live_stages)
+        settings = Settings(queue_worker_mode=mode, mock_scenario=scenario, mock_job_delay_seconds=0,
+                            job_queue_url="jobs", result_queue_url="results")
+        task = start_queue_worker(settings, providers)
+        try:
+            await asyncio.wait_for(results.completed.wait(), timeout=2)
+        finally:
+            await stop_queue_worker(task)
+
+        assert live_calls == ([10] if mode == "live" else [])
+        if scenario != "unavailable":
+            assert results.sent[0]["type"] == "PROGRESS"
+        assert results.sent[-1]["type"] == expected_type
+        assert results.sent[-1]["generation_job_id"] == 41
+        if expected_type == "COMPLETED":
+            assert "days" in results.sent[-1]["payload"]
+        else:
+            assert results.sent[-1]["error_message"]
+            assert results.sent[-1]["payload"] is None
+        assert jobs.deleted == ["r1"]
+
+    asyncio.run(run())
+
+
+def test_parallel_consumers_respect_configured_concurrency():
+    async def run():
+        jobs = ReceivingQueue([job(job_id=i, receipt=f"r{i}") for i in range(4)])
+        results = CompletingQueue(expected=4)
+        gate, all_started = asyncio.Event(), asyncio.Event()
+        active = maximum = 0
+
+        async def stages(request):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            if active == 3:
+                all_started.set()
+            try:
+                await gate.wait()
+                async for event in mock_stages(request, "success", 0):
+                    yield event
+            finally:
+                active -= 1
+
+        w, _ = worker(jobs=jobs, results=results, stages=stages,
+                      settings=Settings(queue_worker_concurrency=3))
+        task = asyncio.create_task(w.run())
+        try:
+            await asyncio.wait_for(all_started.wait(), timeout=2)
+            assert active == 3
+            assert jobs.messages.qsize() == 1
+            gate.set()
+            await asyncio.wait_for(results.completed.wait(), timeout=2)
+        finally:
+            await stop_queue_worker(task)
+        assert maximum == 3
+        assert sorted(jobs.deleted) == ["r0", "r1", "r2", "r3"]
+        assert active == 0
+
+    asyncio.run(run())
+
+
+def test_stopping_parallel_consumers_cancels_inflight_jobs_without_deleting_them():
+    async def run():
+        jobs = ReceivingQueue([job(job_id=i, receipt=f"r{i}") for i in range(2)])
+        started = asyncio.Event()
+        active = 0
+
+        async def slow(request):
+            nonlocal active
+            active += 1
+            try:
+                yield "PLACES", "STARTED", None
+                if active == 2:
+                    started.set()
+                await asyncio.Event().wait()
+            finally:
+                active -= 1
+
+        w, _ = worker(jobs=jobs, stages=slow, settings=Settings(queue_worker_concurrency=2))
+        task = asyncio.create_task(w.run())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+        finally:
+            await stop_queue_worker(task)
+        assert active == 0
+        assert jobs.deleted == []
+        assert all(message["type"] == "PROGRESS" for message in w.results.sent)
+
+    asyncio.run(run())
+
+
+def test_parallel_duplicate_is_not_generated_twice():
+    async def run():
+        class Jobs(ReceivingQueue):
+            def __init__(self):
+                super().__init__([job(receipt="r1"), job(receipt="r2")])
+                self.duplicate_deleted = asyncio.Event()
+
+            async def delete(self, receipt):
+                await super().delete(receipt)
+                if receipt == "r2":
+                    self.duplicate_deleted.set()
+
+        jobs, results = Jobs(), CompletingQueue()
+        gate = asyncio.Event()
+
+        async def slow(request):
+            await gate.wait()
+            async for event in mock_stages(request, "success", 0):
+                yield event
+
+        w, calls = worker(jobs=jobs, results=results, stages=slow,
+                          settings=Settings(queue_worker_concurrency=2))
+        task = asyncio.create_task(w.run())
+        try:
+            await asyncio.wait_for(jobs.duplicate_deleted.wait(), timeout=2)
+            assert calls == [10]
+            gate.set()
+            await asyncio.wait_for(results.completed.wait(), timeout=2)
+        finally:
+            await stop_queue_worker(task)
+        assert sum(message["type"] == "COMPLETED" for message in results.sent) == 1
+        assert sorted(jobs.deleted) == ["r1", "r2"]
+
+    asyncio.run(run())

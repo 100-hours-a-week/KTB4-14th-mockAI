@@ -6,7 +6,7 @@ import math
 import re
 
 from app.clients.mock import MockPlaces, MockRoutes, MockSearch
-from app.core.exceptions import GUIDE_NO_ACCOMMODATION, GUIDE_NO_PLACES, GUIDE_WALKING, GenerationFailed
+from app.core.exceptions import GUIDE_NO_ACCOMMODATION, GUIDE_NO_PLACES, GUIDE_WALKING, GenerationFailed, ServiceUnavailable
 from app.core.geo import distance_km
 from app.schemas.itinerary import TravelGenerationRequest
 from app.schemas.planner import (
@@ -134,3 +134,15 @@ async def mock_stages(request: TravelGenerationRequest, scenario: str, delay_sec
                 raise GenerationFailed("목업 실패 시나리오입니다.", reason=scenario, guide=FAIL_GUIDES[scenario])
             if scenario == "drop" and stage == "ROUTES":
                 return
+
+
+async def mock_job_stages(request: TravelGenerationRequest, scenario: str, delay_seconds: float):
+    """Reuse mock generation, delaying successful completion until the configured job age."""
+    if scenario == "unavailable":
+        raise ServiceUnavailable()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + delay_seconds
+    async for stage, status, result in mock_stages(request, scenario, 0):
+        if stage == "COMPLETE":
+            await asyncio.sleep(max(0.0, deadline - loop.time()))
+        yield stage, status, result

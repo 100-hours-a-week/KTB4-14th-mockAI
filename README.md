@@ -43,13 +43,16 @@ PLACE_RECOMMEND_STARTED → PLACE_RECOMMEND_DONE
 
 ## SQS 큐 워커
 
-API와 별개로, 서버 프로세스 안의 백그라운드 워커가 SQS로 여행 생성 요청을 처리합니다. `AUDIGO_AI_JOB_QUEUE_URL`과 `AUDIGO_AI_RESULT_QUEUE_URL`이 모두 있을 때만 켜집니다. 자세한 설계는 [docs/design/sqs-queue-worker.md](docs/design/sqs-queue-worker.md)에 있습니다.
+API와 별개로, 서버 프로세스 안의 백그라운드 워커가 SQS로 여행 생성 요청을 처리합니다. `AUDIGO_AI_JOB_QUEUE_URL`과 `AUDIGO_AI_RESULT_QUEUE_URL`이 모두 있고 `AUDIGO_AI_QUEUE_WORKER_MODE`가 `off`가 아닐 때만 켜집니다. 자세한 설계는 [docs/design/sqs-queue-worker.md](docs/design/sqs-queue-worker.md), 부하 테스트 준비는 [docs/sqs-mock-load-test.md](docs/sqs-mock-load-test.md)에 있습니다.
 
 ```text
 Backend → AI Job Queue → 워커(일정 생성) → AI Result Queue → Backend
 ```
 
-- Job 메시지를 한 번에 1개씩 받아 순서대로 처리합니다. 생성 제한 시간(5분)은 API와 같습니다.
+- `live`(기본)는 실제 생성, `mock`은 기존 Mock 생성기를 사용하고, `off`는 큐를 소비하지 않습니다. HTTP API의 동작은 변경하지 않습니다.
+- 각 소비 루프는 Job 메시지를 한 번에 1개씩 받습니다. 프로세스당 동시 처리 수는 `AUDIGO_AI_QUEUE_WORKER_CONCURRENCY`(기본 1, 최대 32)로 조절합니다. 생성 제한 시간(5분)은 API와 같습니다.
+- SQS Mock은 외부 AI·카카오를 호출하지 않고, 정상 완료까지 최소 `MOCK_JOB_DELAY_SECONDS`(기본 30초)를 기다립니다. 요청 내용에 맞는 기존 Mock 결과와 `PROGRESS`·`COMPLETED`·`FAILED` 계약을 재사용합니다. 실패 시나리오에는 성공 지연을 적용하지 않습니다.
+- 모드 변경은 이 프로세스에만 적용됩니다. 같은 Job 큐를 소비하는 실제 AI 서버와 Mock 서버를 동시에 켜지 마세요. 전용 테스트 큐 또는 담당자와 합의한 단독 소비 시간대가 필요합니다.
 - 단계마다 `PROGRESS`를 보내고, 끝나면 `COMPLETED`(`payload`에 최종 일정) 또는 `FAILED`(`error_message`)를 보냅니다.
 - 최종 결과를 보낸 뒤에 Job 메시지를 삭제합니다. 보내지 못하면 3번까지 다시 시도하고, 그래도 실패하면 메시지를 남겨 둡니다.
 - 같은 `generation_job_id`가 다시 들어오면 AI를 호출하지 않고 삭제합니다. 처리 기록은 프로세스 메모리(최근 1,000건)에 있어서 재시작하면 사라집니다.
@@ -144,6 +147,9 @@ docker run --rm -p 8000:8000 --env-file .env audigo-mock-ai
 | `AWS_REGION` | SQS 큐 리전, 기본 `ap-northeast-2` |
 | `AUDIGO_AI_JOB_QUEUE_URL` | 여행 생성 요청을 받는 큐. 결과 큐 URL과 함께 있어야 워커가 켜집니다 |
 | `AUDIGO_AI_RESULT_QUEUE_URL` | 진행 상태·결과를 보내는 큐 |
+| `AUDIGO_AI_QUEUE_WORKER_MODE` | `live`(기본), `mock`, `off`. Worker만 제어하며 HTTP 경로는 바꾸지 않습니다 |
+| `AUDIGO_AI_QUEUE_WORKER_CONCURRENCY` | 프로세스당 동시 처리 수, 정수 1~32, 기본 1 |
+| `MOCK_JOB_DELAY_SECONDS` | SQS Mock 정상 생성의 최소 전체 시간, 기본 30초. 0 이상 유한한 수, Mock 모드에서 생성 제한 시간(기본 300초) 미만이어야 합니다 |
 | `MATCHING_MAX_CANDIDATES` | 매칭 후보 전달 상한. 양의 정수, 초기 구현 기본 1000. 초과하면 422이며 BE 연동 시 조정 |
 | `MATCHING_MAX_BODY_BYTES` | 매칭 JSON 본문 최대 바이트 수. 양의 정수, 초기 기본 2097152(2MiB), 초과 시 422 |
 

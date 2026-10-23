@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from datetime import datetime, timezone
 import json
 import logging
@@ -19,6 +19,7 @@ from app.core.config import Settings
 from app.core.exceptions import ApiError, ServiceUnavailable, describe_validation_error
 from app.core.logging import failure, record, request_id as log_request_id
 from app.schemas.itinerary import TravelGenerationRequest
+from app.services.mock_generator import mock_job_stages
 from app.services.pipeline import Providers, generation_stages
 from app.services.streaming.backend_adapter import STAGE_NAMES, backend_result
 from app.services.streaming.sse import stage_events
@@ -60,7 +61,17 @@ class QueueWorker:
         self.seen: OrderedDict[int, None] = OrderedDict()
 
     async def run(self) -> None:
-        record("queue_worker_started")
+        record("queue_worker_started", mode=self.settings.queue_worker_mode,
+               concurrency=self.settings.queue_worker_concurrency)
+        consumers = [asyncio.create_task(self.consume()) for _ in range(self.settings.queue_worker_concurrency)]
+        try:
+            await asyncio.gather(*consumers)
+        finally:
+            for consumer in consumers:
+                consumer.cancel()
+            await asyncio.gather(*consumers, return_exceptions=True)
+
+    async def consume(self) -> None:
         while True:
             try:
                 messages = await self.jobs.receive()
@@ -123,18 +134,19 @@ class QueueWorker:
             return failed_message(job_id, exc)
 
         record("queue_job_started", generation_job_id=job_id, travel_plan_id=request.travel_plan_id)
-        async for stage, status, result in stage_events(self.stages(request), self.settings, f"job_{job_id}"):
-            if stage == "tick":
-                continue
-            if stage == "error":
-                return failed_message(job_id, result)
-            if stage == "COMPLETE":
-                return result_message(job_id, "COMPLETED", stage="ROUTE_OPTIMIZE", state="DONE",
-                                      payload=backend_result(result))
-            # 길찾기 완료는 COMPLETED가 대신합니다. SSE의 ROUTE_OPTIMIZE_DONE과 같습니다.
-            if stage == "ROUTES" and status == "COMPLETED":
-                continue
-            await self.publish_progress(job_id, STAGE_NAMES[stage], "RUNNING" if status == "STARTED" else "DONE")
+        async with aclosing(stage_events(self.stages(request), self.settings, f"job_{job_id}")) as events:
+            async for stage, status, result in events:
+                if stage == "tick":
+                    continue
+                if stage == "error":
+                    return failed_message(job_id, result)
+                if stage == "COMPLETE":
+                    return result_message(job_id, "COMPLETED", stage="ROUTE_OPTIMIZE", state="DONE",
+                                          payload=backend_result(result))
+                # 길찾기 완료는 COMPLETED가 대신합니다. SSE의 ROUTE_OPTIMIZE_DONE과 같습니다.
+                if stage == "ROUTES" and status == "COMPLETED":
+                    continue
+                await self.publish_progress(job_id, STAGE_NAMES[stage], "RUNNING" if status == "STARTED" else "DONE")
         # 최종 일정 없이 생성이 끝났습니다.
         return failed_message(job_id, ServiceUnavailable())
 
@@ -169,12 +181,16 @@ class QueueWorker:
 
 
 def start_queue_worker(settings: Settings, providers: Providers) -> asyncio.Task | None:
-    if not (settings.job_queue_url and settings.result_queue_url):
-        record("queue_worker_disabled")
+    if settings.queue_worker_mode == "off" or not (settings.job_queue_url and settings.result_queue_url):
+        record("queue_worker_disabled", mode=settings.queue_worker_mode)
         return None
     client = sqs_client(settings.aws_region)
+    if settings.queue_worker_mode == "mock":
+        stages = lambda request: mock_job_stages(request, settings.mock_scenario, settings.mock_job_delay_seconds)
+    else:
+        stages = lambda request: generation_stages(request, providers)
     worker = QueueWorker(SqsQueue(client, settings.job_queue_url), SqsQueue(client, settings.result_queue_url),
-                         lambda request: generation_stages(request, providers), settings)
+                         stages, settings)
     return asyncio.create_task(worker.run())
 
 
