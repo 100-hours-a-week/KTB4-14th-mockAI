@@ -16,6 +16,7 @@ from app.clients.openai_client import OpenAIClient
 from app.core.config import Settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import request_id as log_request_id
+from app.core.metrics import setup_metrics
 from app.core.security import require_api_token, require_docs_credentials
 from app.services.pipeline import Providers
 from app.services.planner import OpenAIPlanner
@@ -61,6 +62,8 @@ def create_app(*, settings: Settings | None = None, providers: Providers | None 
             log_request_id.reset(token)
 
     register_exception_handlers(app)
+    # Prometheus 수집용 GET /metrics (인증 없음, 클러스터 내부에서만 접근)
+    setup_metrics(app)
 
     auth = [Depends(require_api_token(settings.api_token))]
     app.include_router(health.router)
