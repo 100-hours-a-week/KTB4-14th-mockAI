@@ -102,6 +102,48 @@ jobs:
             --query 'imageDetails[0].imageDigest' --output text)
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      - name: 이미지 후보 JSON 생성
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          digest = os.environ['DIGEST']
+          if re.fullmatch(r'sha256:[0-9a-f]{64}', digest) is None:
+              raise SystemExit('Invalid image digest: expected sha256:<64 lowercase hex characters>')
+
+          candidate = {
+              'schema_version': 1,
+              'source_repository': os.environ['GITHUB_REPOSITORY'],
+              'source_sha': os.environ['GITHUB_SHA'],
+              'source_ref': os.environ['GITHUB_REF'],
+              'image_repository': os.environ['REPOSITORY_URI'],
+              'image_tag': os.environ['VERSION'],
+              'image_digest': digest,
+              'platform': 'linux/arm64',
+              'workflow_run_id': os.environ['GITHUB_RUN_ID'],
+              'workflow_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'workflow_run_url': (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }
+          Path('image-candidate.json').write_text(
+              json.dumps(candidate, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: 이미지 후보 artifact 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-image-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image-candidate.json
+          if-no-files-found: error
+
       - name: Release 정보 게시 (Cloud 레포 Release PR 작성용)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
