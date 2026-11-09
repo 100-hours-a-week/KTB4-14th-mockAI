@@ -33,6 +33,11 @@ RUN /app/.venv/bin/pytest
 FROM python:3.12-slim AS runtime
 WORKDIR /app
 
+# 최종 이미지의 Debian zlib 보안 패치를 반영하고 apt 인덱스는 남기지 않습니다.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
