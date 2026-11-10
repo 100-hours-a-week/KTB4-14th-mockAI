@@ -1,4 +1,4 @@
-name: AI PR CI
+name: AI PR 검증
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
     # ARM64 이미지를 직접 빌드하므로 QEMU 에뮬레이션이 불필요
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout
+      - name: 소스 코드 확인
         uses: actions/checkout@v7
         with:
           persist-credentials: false # checkout 이후 Git 명령용 인증 정보를 유지하지 않음
@@ -80,7 +80,7 @@ jobs:
           }
 
           {
-            echo "## AI PR CI 결과"
+            echo "## AI PR 검증 결과"
             echo
             echo "| 항목 | 값 |"
             echo "|---|---|"

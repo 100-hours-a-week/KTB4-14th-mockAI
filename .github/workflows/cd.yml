@@ -1,4 +1,4 @@
-name: AI Image CD
+name: AI 이미지 발행
 
 # AI 레포의 CD는 "운영 이미지 생성·검증·ECR 저장"까지만 담당한다.
 on:
@@ -24,7 +24,7 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
     steps:
-      - name: Checkout
+      - name: 소스 코드 확인
         uses: actions/checkout@v7
         with:
           persist-credentials: false
